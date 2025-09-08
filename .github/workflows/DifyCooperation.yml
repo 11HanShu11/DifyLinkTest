@@ -92,9 +92,11 @@ jobs:
       uses: actions/github-script@v6 # GitHub APIを操作するためのアクション [19]
       # コメントボディが空でない場合にのみ実行
       if: ${{ always() && steps.dify_process.outputs.comment_body != '' }}
+      env:
+          COMMENT_BODY: ${{ steps.dify_process.outputs.comment_body }}
       with:
         script: |
-          const commentBody = `${{ steps.dify_process.outputs.comment_body }}`;
+          const commentBody = process.env.COMMENT_BODY;
           const { owner, repo } = context.repo;
           const pullRequestNumber = context.payload.pull_request?.number; // PR番号を取得 [20]
 
@@ -109,5 +111,3 @@ jobs:
             issue_number: pullRequestNumber, # PR番号をissue_numberとして使用 [20]
             body: commentBody
           });
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHubが提供するトークン
