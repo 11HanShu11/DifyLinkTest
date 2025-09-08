@@ -13,10 +13,10 @@ namespace Sugoroku
         private const float ROLL_TIME = 1f; //rサイコロの回転を見せる時間
         private const float RESULT_TIME = 1f; //rサイコロの結果を見せる時間
 
-
         [SerializeField] private List<Sprite> _diceSprites; // 0〜5: サイコロ目1〜6
         [SerializeField] private Image _diceDisplay;
         [SerializeField] private Button _diceBtn;
+        [SerializeField] private Button _AddBtn;
 
         private readonly Subject<int> _diceResult = new Subject<int>();
         public IObservable<int> DiceResult => _diceResult;
