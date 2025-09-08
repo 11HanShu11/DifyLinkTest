@@ -44,6 +44,7 @@ jobs:
             echo "update_type=full" >> $GITHUB_OUTPUT
           else
             echo "update_type=diff" >> $GITHUB_OUTPUT
+          fi
 
       # 4. Dify に送信して Mermaid 作成
       - name: Generate class diagrams with Dify
