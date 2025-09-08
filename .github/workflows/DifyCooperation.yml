@@ -1,113 +1,106 @@
-name: Generate C# Class Diagram # ワークフローの名前 [5]
+name: Generate C# Class Diagrams
 
 on:
-  pull_request: # プルリクエストが作成・更新された時にトリガー
-    types: [opened, synchronize, reopened] # PRオープン、同期、再オープン時 [6]
+  push:
     paths:
-      - '**.cs' # .csファイルが変更された場合のみ実行 [5]
+      - '**.cs'
+  pull_request:
+    paths:
+      - '**.cs'
 
 jobs:
   generate-diagram:
-    runs-on: ubuntu-latest # 最新のUbuntuランナーで実行 [5]
+    runs-on: ubuntu-latest
     permissions:
-      contents: read # コードチェックアウトのために必要 [6]
-      pull-requests: write # PRにコメントを投稿するために必要 [6]
-      issues: write # PRにコメントを投稿するために必要 (issues APIを使用) [6]
+      contents: write
+      pull-requests: write
+      issues: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4 # リポジトリのコードをチェックアウト [5, 7]
-      with:
-        fetch-depth: 0 # 差分取得のために全ての履歴をフェッチ。git diff に必要 [6, 7]
+      # 1. リポジトリチェックアウト
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Process changed C# files and generate diagrams
-      id: dify_process # このステップのIDを設定し、後続ステップで出力を参照できるようにする
-      env:
-        DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }} # Dify APIキー (GitHub Secretsに設定) [8]
-        DIFY_BASE_URL: 'https://api.dify.ai/v1' # DifyのベースURL [8, 9]
-        DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }} # DifyワークフローID (GitHub Secretsに設定) [8]
-      run: |
-        # 変更された.csファイルの一覧を取得
-        # プルリクエストのベースコミット (PRの元となるブランチの最新コミット) と
-        # ヘッドコミット (PRブランチの最新コミット) の間の差分から、変更された.csファイルを抽出 [7, 10]
-        CHANGED_CS_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '\.cs$')
+      # 2. カウンター読み込み・初期化
+      - name: Load counter
+        id: load_counter
+        run: |
+          if [ -f ".classdiagram_counter" ]; then
+            COUNTER=$(cat .classdiagram_counter)
+          else
+            COUNTER=0
+          fi
+          echo "counter=$COUNTER" >> $GITHUB_OUTPUT
 
-        if [ -z "$CHANGED_CS_FILES" ]; then
-          echo "No C# files changed in this pull request. Skipping diagram generation."
-          # コメントボディを空に設定し、後続ステップでコメント投稿をスキップさせる
-          echo "comment_body<<EOF" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          exit 0
-        fi
+      # 3. 初回全体生成判定
+      - name: Determine full or diff update
+        id: determine_update
+        run: |
+          if [ ! -f "docs/ClassDiagrams.md" ]; then
+            echo "update_type=full" >> $GITHUB_OUTPUT
+          elif [ ${{ steps.load_counter.outputs.counter }} -ge 10 ]; then
+            echo "update_type=full" >> $GITHUB_OUTPUT
+          else
+            echo "update_type=diff" >> $GITHUB_OUTPUT
 
-        # コメントボディの初期化
-        FULL_COMMENT_BODY="## 🤖 AI Generated C# Class Diagrams\n\n"
-        
-        # 各変更されたC#ファイルについてDifyワークフローを呼び出し、結果を集約 [7, 11]
-        # while IFS= read -r は、ファイルパスにスペースが含まれていても正しく処理するための慣用句
-        while IFS= read -r file_path; do
-          if [ -n "$file_path" ]; then # ファイルパスが空でないことを確認
-            echo "Processing file: $file_path"
-            # ファイル内容を読み込み、JSON文字列としてエスケープ [12]
-            # Dify APIのinputsはJSON形式の文字列を受け取るため、jq -Rs . を使用
-            FILE_CONTENT=$(cat "$file_path" | jq -Rs .)
+      # 4. Dify に送信して Mermaid 作成
+      - name: Generate class diagrams with Dify
+        id: generate_diagram
+        env:
+          DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
+          DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
+        run: |
+          mkdir -p docs
+          
+          if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
+            echo "Performing full generation..."
+            FILES=$(find . -name "*.cs")
+          else
+            echo "Performing diff update..."
+            FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.cs$' || true)
+          fi
 
-            # Difyワークフローの実行 (POST /workflows/:workflow_id/run) [13, 14]
-            RESPONSE=$(curl -X POST "${{ env.DIFY_BASE_URL }}/workflows/${{ env.DIFY_WORKFLOW_ID }}/run" \
-              -H "Authorization: Bearer ${{ env.DIFY_API_KEY }}" \
+          FULL_MD="## 🤖 AI Generated C# Class Diagrams\n\n"
+
+          for file in $FILES; do
+            echo "Processing $file"
+            FILE_CONTENT=$(cat "$file" | jq -Rs .)
+            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/${DIFY_WORKFLOW_ID}/run" \
+              -H "Authorization: Bearer ${DIFY_API_KEY}" \
               -H "Content-Type: application/json" \
               -d '{
-                "inputs": {
-                  "csharp_code": '"$FILE_CONTENT"' # Difyワークフローの入力変数 "csharp_code" にファイル内容を渡す [2, 4]
-                },
-                "response_mode": "blocking", # 実行完了後に結果を返すブロッキングモード [8, 15, 16]
-                "user": "github-actions-bot" # Difyへのリクエストユーザー識別子 [15-17]
+                "inputs": { "csharp_code": '"$FILE_CONTENT"' },
+                "response_mode": "blocking",
+                "user": "github-actions-bot"
               }')
-
-            # Difyからの応答をパースして、クラス図のMermaidコードを抽出 [17, 18]
-            MERMAID_DIAGRAM=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram')
-
-            if [ -n "$MERMAID_DIAGRAM" ]; then
-              # Mermaidコードが正常に生成された場合、コメントボディに追加 [17]
-              FULL_COMMENT_BODY+="### for \`$file_path\`\n"
-              FULL_COMMENT_BODY+="<details><summary>Click to expand diagram for \`$file_path\`</summary>\n\n\`\`\`mermaid\n$MERMAID_DIAGRAM\n\`\`\`\n\n</details>\n\n"
+            MERMAID=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram')
+            if [ -n "$MERMAID" ] && [ "$MERMAID" != "null" ]; then
+              FULL_MD+="### $file\n<details><summary>Expand</summary>\n\n\`\`\`mermaid\n$MERMAID\n\`\`\`\n</details>\n\n"
             else
-              # 生成に失敗した場合
-              FULL_COMMENT_BODY+="### for \`$file_path\`\n"
-              FULL_COMMENT_BODY+="*Dify AI failed to generate a Mermaid diagram or no classes were found for this file.* \n\n"
+              FULL_MD+="### $file\n*Failed to generate diagram*\n\n"
             fi
+          done
+
+          echo "$FULL_MD" > docs/ClassDiagrams.md
+
+      # 5. カウンター更新
+      - name: Update counter
+        run: |
+          if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
+            echo "0" > .classdiagram_counter
+          else
+            COUNTER=${{ steps.load_counter.outputs.counter }}
+            COUNTER=$((COUNTER + 1))
+            echo "$COUNTER" > .classdiagram_counter
           fi
-        done <<< "$CHANGED_CS_FILES" # 変更されたファイルリストをループに渡す
 
-        FULL_COMMENT_BODY+="\n*Powered by Dify AI*"
-        
-        # GitHub Actionsの出力として複数行のコメントボディを設定 (新しい書き方)
-        # https://github.blog/changelog/2022-10-11-github-actions-deprecating-save-state-and-set-output-commands/
-        echo "comment_body<<EOF" >> $GITHUB_OUTPUT
-        echo "$FULL_COMMENT_BODY" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        
-    - name: Post aggregated comment to GitHub
-      uses: actions/github-script@v6 # GitHub APIを操作するためのアクション [19]
-      # コメントボディが空でない場合にのみ実行
-      if: ${{ always() && steps.dify_process.outputs.comment_body != '' }}
-      env:
-          COMMENT_BODY: ${{ steps.dify_process.outputs.comment_body }}
-      with:
-        script: |
-          const commentBody = process.env.COMMENT_BODY;
-          const { owner, repo } = context.repo;
-          const pullRequestNumber = context.payload.pull_request?.number; // PR番号を取得 [20]
-
-          if (!pullRequestNumber) {
-            console.log("This is not a pull request event. Skipping comment posting.");
-            return;
-          }
-
-          await github.rest.issues.createComment({ # GitHubのissues APIを使ってコメントを投稿 [19, 21]
-            owner,
-            repo,
-            issue_number: pullRequestNumber, # PR番号をissue_numberとして使用 [20]
-            body: commentBody
-          });
+      # 6. Commit & push updated Markdown and counter
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions-bot"
+          git config user.email "github-actions-bot@users.noreply.github.com"
+          git add docs/ClassDiagrams.md .classdiagram_counter
+          git commit -m "Update C# class diagrams [skip ci]" || echo "No changes to commit"
+          git push origin HEAD
