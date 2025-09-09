@@ -79,7 +79,6 @@ jobs:
             echo "$FILE_CONTENT" > "docs/debug/${SAFE_NAME}.json"
 
             # Dify API 呼び出し
-            #RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/${DIFY_WORKFLOW_ID}/run" \
             RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/aUtPPGtElU340YXf/run" \
             
               -H "Authorization: Bearer ${DIFY_API_KEY}" \
