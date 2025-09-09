@@ -49,14 +49,15 @@ jobs:
           fi
 
       # 4. Dify に送信して Mermaid 作成（デバッグ強化版）
-      - name: Generate class diagrams with Dify
+      # 4. Dify に送信して Mermaid 作成（完全デバッグ版）
+      - name: Generate class diagrams with Dify (Debug)
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
           DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
         run: |
-          mkdir -p docs
-          
+          mkdir -p docs/debug
+
           if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
             echo "Performing full generation..."
             FILES=$(find . -name "*.cs")
@@ -69,11 +70,13 @@ jobs:
 
           for file in $FILES; do
             echo "Processing $file"
-            FILE_CONTENT=$(cat "$file" | jq -Rs .)
 
-            # JSON エスケープしてファイル保存（デバッグ用）
+            # JSON エスケープ
             FILE_CONTENT=$(jq -Rs . "$file")
-            echo "$FILE_CONTENT" > "docs/debug/$(basename "$file").json"
+
+            # ファイル名を安全化して保存
+            SAFE_NAME=$(basename "$file" | tr '/' '_' | tr ' ' '_')
+            echo "$FILE_CONTENT" > "docs/debug/${SAFE_NAME}.json"
 
             # Dify API 呼び出し
             RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/${DIFY_WORKFLOW_ID}/run" \
@@ -84,20 +87,19 @@ jobs:
                 "response_mode": "blocking",
                 "user": "github-actions-bot"
               }')
-              
-          　 # 生レスポンスをログに出力（デバッグ用）
+
+            # 生レスポンスをログに出力（デバッグ用）
             echo "API Response for $file:"
             echo "$RESPONSE" | jq .
 
             # Mermaid 出力を取得
             MERMAID=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram')
-            
+
             if [ -n "$MERMAID" ] && [ "$MERMAID" != "null" ]; then
               FULL_MD+="### $file\n<details><summary>Expand</summary>\n\n\`\`\`mermaid\n$MERMAID\n\`\`\`\n</details>\n\n"
             else
-             # エラー原因を API レスポンスから取得して出力
               ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-              FULL_MD+="### $file\n*Failed to generate diagram*\n\n"
+              FULL_MD+="### $file\n*Failed to generate diagram*: $ERROR_MSG\n\n"
             fi
           done
 
