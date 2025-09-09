@@ -104,10 +104,7 @@ jobs:
         run: |
           git config user.name "github-actions-bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
-
-          # 念のため必ず存在させる
           [ -f .classdiagram_counter ] || echo "0" > .classdiagram_counter
-
           git add docs/ClassDiagrams.md .classdiagram_counter
           git commit -m "Update C# class diagrams [skip ci]" || echo "No changes to commit"
-          git push origin main
+          git push origin HEAD:main
