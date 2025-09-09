@@ -31,6 +31,8 @@ jobs:
             COUNTER=$(cat .classdiagram_counter)
           else
             COUNTER=0
+            # 初回にファイルを作る（これで以降の git add エラーを防止）
+            echo "0" > .classdiagram_counter
           fi
           echo "counter=$COUNTER" >> $GITHUB_OUTPUT
 
