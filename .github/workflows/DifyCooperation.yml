@@ -54,7 +54,7 @@ jobs:
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
-          DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
+          DIFY_WORKFLOW_ID: "aUtPPGtElU340YXf"
         run: |
           mkdir -p docs/debug
 
