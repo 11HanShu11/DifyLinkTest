@@ -49,7 +49,6 @@ jobs:
           fi
 
       # 4. Dify に送信して Mermaid 作成（デバッグ強化版）
-      # 4. Dify に送信して Mermaid 作成（完全デバッグ版）
       - name: Generate class diagrams with Dify (Debug)
         id: generate_diagram
         env:
@@ -79,14 +78,10 @@ jobs:
             echo "$FILE_CONTENT" > "docs/debug/${SAFE_NAME}.json"
 
             # Dify API 呼び出し
-            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/${DIFY_WORKFLOW_ID}/run" \
-              -H "Authorization: Bearer ${DIFY_API_KEY}" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "inputs": { "csharp_code": '"$FILE_CONTENT"' },
-                "response_mode": "blocking",
-                "user": "github-actions-bot"
-              }')
+            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+              --header "Authorization: Bearer ${DIFY_API_KEY}" \
+              --header "Content-Type: application/json" \
+              --data-raw "{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": { \"csharp_code\": $FILE_CONTENT }, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
 
             # 生レスポンスをログに出力（デバッグ用）
             echo "API Response for $file:"
@@ -105,6 +100,15 @@ jobs:
 
           echo "$FULL_MD" > docs/ClassDiagrams.md
 
+      #DIFY_WORKFLOW_IDの文字数取得
+      - name: Debug workflow id
+        run: |
+          echo "Length of workflow id: ${#DIFY_WORKFLOW_ID}"
+          echo "Starts with: ${DIFY_WORKFLOW_ID:0:5}"
+          echo "Ends with: ${DIFY_WORKFLOW_ID: -5}"
+        env:
+          DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
+
       # 5. カウンター更新
       - name: Update counter
         run: |
@@ -116,7 +120,7 @@ jobs:
             echo "$COUNTER" > .classdiagram_counter
           fi
 
-          # 6. Commit & push updated Markdown and counter
+       # 6. Commit & push updated Markdown and counter
       - name: Commit & push updated Markdown and counter
         run: |
           git config user.name "github-actions-bot"
