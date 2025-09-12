@@ -3,10 +3,10 @@ name: Generate C# Class Diagrams
 on:
   push:
     paths:
-      - '**.cs'
+      - "**.cs"
   pull_request:
     paths:
-      - '**.cs'
+      - "**.cs"
 
 jobs:
   generate-diagram:
@@ -55,7 +55,7 @@ jobs:
           DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
         run: |
           mkdir -p docs/debug
-          
+
           if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
             echo "Performing full generation..."
             FILES=$(find . -name "*.cs")
@@ -63,11 +63,11 @@ jobs:
             echo "Performing diff update..."
             FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.cs$' || true)
           fi
-          
+
           # ヘッダーを作成
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          
+
           # ファイルが存在するかチェック
           if [ -z "$FILES" ]; then
             echo "No .cs files found to process"
@@ -111,9 +111,16 @@ jobs:
               echo "" >> docs/ClassDiagrams.md
               
               if [ -n "$MERMAID" ] && [ "$MERMAID" != "null" ] && [ "$MERMAID" != "" ]; then
-                echo '```mermaid' >> docs/ClassDiagrams.md
-                echo "$MERMAID" >> docs/ClassDiagrams.md
-                echo '```' >> docs/ClassDiagrams.md
+                # Mermaidコードがすでに```mermaidブロックを含んでいるかチェック
+                if echo "$MERMAID" | grep -q '```mermaid'; then
+                  # すでにブロックが含まれている場合はそのまま出力
+                  echo "$MERMAID" >> docs/ClassDiagrams.md
+                else
+                  # ブロックが含まれていない場合は追加
+                  echo '```mermaid' >> docs/ClassDiagrams.md
+                  echo "$MERMAID" >> docs/ClassDiagrams.md
+                  echo '```' >> docs/ClassDiagrams.md
+                fi
               else
                 ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Failed to parse response")
                 echo "*Failed to generate diagram*: $ERROR_MSG" >> docs/ClassDiagrams.md
@@ -148,43 +155,48 @@ jobs:
             echo "$COUNTER" > .classdiagram_counter
           fi
 
-      # 代替案: 競合を避けるためのPull Requestベースのアプローチ
-
-      # 6. Create Pull Request instead of direct push
-      - name: Create Pull Request with updated diagrams
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 6. Commit & push updated Markdown and counter
+      - name: Commit & push updated Markdown and counter
         run: |
           git config user.name "github-actions-bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
           [ -f .classdiagram_counter ] || echo "0" > .classdiagram_counter
-          
+
           # 変更があるかチェック
           if git diff --quiet && git diff --cached --quiet; then
-            echo "No changes to create PR"
+            echo "No changes to commit"
             exit 0
           fi
-          
+
           git add docs/ClassDiagrams.md .classdiagram_counter
           if [ -d docs/debug ]; then
             git add docs/debug/
           fi
-          
-          # 一意なブランチ名を作成
-          BRANCH_NAME="update-class-diagrams-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH_NAME"
-          
-          git commit -m "Update C# class diagrams"
-          git push origin "$BRANCH_NAME"
-          
-          # Pull Requestを作成
-          curl -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls" \
-            -d "{
-              \"title\": \"Auto-update: C# Class Diagrams\",
-              \"head\": \"$BRANCH_NAME\",
-              \"base\": \"main\",
-              \"body\": \"Automatically generated class diagrams from C# code changes.\"
-            }"
+
+          # リモートの最新変更を取得してマージ
+          git fetch origin
+          git pull --rebase origin main || {
+            echo "Rebase failed, trying merge strategy"
+            git pull origin main
+          }
+
+          git commit -m "Update C# class diagrams [skip ci]" || echo "No changes to commit"
+
+          # プッシュを最大3回試行
+          for i in {1..3}; do
+            if git push origin HEAD:main; then
+              echo "Push successful"
+              break
+            else
+              echo "Push failed, attempt $i of 3"
+              if [ $i -lt 3 ]; then
+                echo "Fetching latest changes and retrying..."
+                git fetch origin
+                git pull --rebase origin main || git pull origin main
+                sleep 2
+              else
+                echo "Push failed after 3 attempts"
+                exit 1
+              fi
+            fi
+          done
