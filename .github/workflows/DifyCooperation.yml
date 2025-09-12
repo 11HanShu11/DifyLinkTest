@@ -23,32 +23,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. カウンター読み込み・初期化
-      - name: Load counter
-        id: load_counter
-        run: |
-          if [ -f ".classdiagram_counter" ]; then
-            COUNTER=$(cat .classdiagram_counter)
-          else
-            COUNTER=0
-            echo "0" > .classdiagram_counter
-          fi
-          echo "counter=$COUNTER" >> $GITHUB_OUTPUT
-
-      # 3. 初回全体生成判定
-      - name: Determine full or diff update
-        id: determine_update
-        run: |
-          if [ ! -f "docs/ClassDiagrams.md" ]; then
-            echo "update_type=full" >> $GITHUB_OUTPUT
-          elif [ ${{ steps.load_counter.outputs.counter }} -ge 10 ]; then
-            echo "update_type=full" >> $GITHUB_OUTPUT
-          else
-            echo "update_type=diff" >> $GITHUB_OUTPUT
-          fi
-
-      # 4. Dify に送信して Mermaid 作成（修正版）
-      - name: Generate class diagrams with Dify (Fixed)
+      # 2. 全C#ファイルを収集してDifyに送信
+      - name: Generate class diagrams with Dify
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
@@ -56,133 +32,148 @@ jobs:
         run: |
           mkdir -p docs/debug
 
-          if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
-            echo "Performing full generation..."
-            FILES=$(find . -name "*.cs")
-          else
-            echo "Performing diff update..."
-            FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.cs$' || true)
+          echo "Collecting all C# files..."
+          CS_FILES=$(find . -name "*.cs" -type f)
+
+          if [ -z "$CS_FILES" ]; then
+            echo "No .cs files found"
+            echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
+            echo "" >> docs/ClassDiagrams.md
+            echo "No .cs files found to process" >> docs/ClassDiagrams.md
+            exit 0
           fi
 
-          # ヘッダーを作成
+          # 全ファイルの内容を1つのJSONに統合
+          echo "Combining all C# files into single payload..."
+          ALL_FILES_JSON="{"
+          FIRST=true
+
+          for file in $CS_FILES; do
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            
+            # ファイル名をキーとして使用
+            SAFE_KEY=$(echo "$file" | sed 's/[^a-zA-Z0-9]/_/g')
+            FILE_CONTENT=$(jq -Rs . "$file")
+            
+            if [ "$FIRST" = true ]; then
+              ALL_FILES_JSON="${ALL_FILES_JSON}\"${SAFE_KEY}\": $FILE_CONTENT"
+              FIRST=false
+            else
+              ALL_FILES_JSON="${ALL_FILES_JSON}, \"${SAFE_KEY}\": $FILE_CONTENT"
+            fi
+          done
+          ALL_FILES_JSON="${ALL_FILES_JSON}}"
+
+          # デバッグ用に保存
+          echo "$ALL_FILES_JSON" > docs/debug/all_files.json
+
+          echo "Sending to Dify API..."
+          # Dify API呼び出し（全ファイルを一度に送信）
+          RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+            --header "Authorization: Bearer ${DIFY_API_KEY}" \
+            --header "Content-Type: application/json" \
+            --data-raw "{
+              \"workflow_id\": \"${DIFY_WORKFLOW_ID}\", 
+              \"inputs\": { 
+                \"csharp_files\": $ALL_FILES_JSON 
+              }, 
+              \"response_mode\": \"blocking\", 
+              \"user\": \"github-actions-bot\"
+            }")
+
+          # レスポンスをログ出力
+          echo "API Response:"
+          echo "$RESPONSE" | jq . || echo "$RESPONSE"
+
+          # デバッグ用にレスポンス保存
+          echo "$RESPONSE" > docs/debug/dify_response.json
+
+          # 結果をマークダウンに変換
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
+          echo "*Generated from all C# files in the repository*" >> docs/ClassDiagrams.md
+          echo "" >> docs/ClassDiagrams.md
 
-          # ファイルが存在するかチェック
-          if [ -z "$FILES" ]; then
-            echo "No .cs files found to process"
-            echo "No .cs files to process" >> docs/ClassDiagrams.md
+          # Mermaid図を取得
+          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.result' 2>/dev/null || echo "")
+
+          if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
+            echo "<details><summary>📊 Complete Class Diagram</summary>" >> docs/ClassDiagrams.md
+            echo "" >> docs/ClassDiagrams.md
+            
+            # Mermaidブロックが含まれているかチェック
+            if echo "$MERMAID_RESULT" | grep -q '```mermaid'; then
+              echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
+            else
+              echo '```mermaid' >> docs/ClassDiagrams.md
+              echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
+              echo '```' >> docs/ClassDiagrams.md
+            fi
+            
+            echo "" >> docs/ClassDiagrams.md
+            echo "</details>" >> docs/ClassDiagrams.md
           else
-            for file in $FILES; do
-              echo "Processing $file"
-              
-              # ファイルが存在するかチェック
-              if [ ! -f "$file" ]; then
-                echo "Warning: File $file does not exist, skipping..."
-                continue
-              fi
-              
-              # JSON エスケープ
-              FILE_CONTENT=$(jq -Rs . "$file")
-              
-              # ファイル名を安全化して保存
-              SAFE_NAME=$(basename "$file" | tr '/' '_' | tr ' ' '_')
-              echo "$FILE_CONTENT" > "docs/debug/${SAFE_NAME}.json"
-              
-              # Dify API 呼び出し
-              RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
-                --header "Authorization: Bearer ${DIFY_API_KEY}" \
-                --header "Content-Type: application/json" \
-                --data-raw "{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": { \"csharp_code\": $FILE_CONTENT }, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}")
-              
-              # 生レスポンスをログに出力（デバッグ用）
-              echo "API Response for $file:"
-              echo "$RESPONSE" | jq . || echo "$RESPONSE"
-              
-              # デバッグ用にレスポンスも保存
-              echo "$RESPONSE" > "docs/debug/${SAFE_NAME}_response.json"
-              
-              # Mermaid 出力を取得
-              MERMAID=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram' 2>/dev/null || echo "")
-              
-              # ファイルセクションを追加
-              echo "### $file" >> docs/ClassDiagrams.md
-              echo "<details><summary>Expand</summary>" >> docs/ClassDiagrams.md
-              echo "" >> docs/ClassDiagrams.md
-              
-              if [ -n "$MERMAID" ] && [ "$MERMAID" != "null" ] && [ "$MERMAID" != "" ]; then
-                # Mermaidコードがすでに```mermaidブロックを含んでいるかチェック
-                if echo "$MERMAID" | grep -q '```mermaid'; then
-                  # すでにブロックが含まれている場合はそのまま出力
-                  echo "$MERMAID" >> docs/ClassDiagrams.md
-                else
-                  # ブロックが含まれていない場合は追加
-                  echo '```mermaid' >> docs/ClassDiagrams.md
-                  echo "$MERMAID" >> docs/ClassDiagrams.md
-                  echo '```' >> docs/ClassDiagrams.md
-                fi
-              else
-                ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Failed to parse response")
-                echo "*Failed to generate diagram*: $ERROR_MSG" >> docs/ClassDiagrams.md
-              fi
-              
-              echo "</details>" >> docs/ClassDiagrams.md
-              echo "" >> docs/ClassDiagrams.md
-            done
+            ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Failed to parse response")
+            echo "❌ **Failed to generate class diagram**" >> docs/ClassDiagrams.md
+            echo "" >> docs/ClassDiagrams.md
+            echo "Error: $ERROR_MSG" >> docs/ClassDiagrams.md
           fi
 
-      # DIFY_WORKFLOW_IDの文字数取得
-      - name: Debug workflow id
-        run: |
-          echo "Length of workflow id: ${#DIFY_WORKFLOW_ID}"
-          if [ ${#DIFY_WORKFLOW_ID} -gt 10 ]; then
-            echo "Starts with: ${DIFY_WORKFLOW_ID:0:5}"
-            echo "Ends with: ${DIFY_WORKFLOW_ID: -5}"
-          else
-            echo "Workflow ID seems too short"
-          fi
-        env:
-          DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
+          # 処理したファイル一覧を追加
+          echo "" >> docs/ClassDiagrams.md
+          echo "### 📁 Processed Files" >> docs/ClassDiagrams.md
+          echo "" >> docs/ClassDiagrams.md
+          for file in $CS_FILES; do
+            if [ -f "$file" ]; then
+              echo "- \`$file\`" >> docs/ClassDiagrams.md
+            fi
+          done
 
-      # 5. カウンター更新
-      - name: Update counter
-        run: |
-          if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
-            echo "0" > .classdiagram_counter
-          else
-            COUNTER=${{ steps.load_counter.outputs.counter }}
-            COUNTER=$((COUNTER + 1))
-            echo "$COUNTER" > .classdiagram_counter
-          fi
-
-     # 6. Commit & push with force (代替案)
-      - name: Commit & force push updated diagrams
+      # 3. 変更をコミット・プッシュ
+      - name: Commit & push updated class diagram
         run: |
           git config user.name "github-actions-bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
-          [ -f .classdiagram_counter ] || echo "0" > .classdiagram_counter
-          
+          git config pull.rebase false
+
           # 変更があるかチェック
-          if git diff --quiet && git diff --cached --quiet; then
+          if git diff --quiet docs/ClassDiagrams.md; then
             echo "No changes to commit"
             exit 0
           fi
-          
-          # 最新のmainブランチを取得
-          git fetch origin main
-          git reset --hard origin/main
-          
-          # 再度図表を生成（必要に応じて）
-          git add docs/ClassDiagrams.md .classdiagram_counter
+
+          git add docs/ClassDiagrams.md
           if [ -d docs/debug ]; then
             git add docs/debug/
           fi
-          
-          # 変更があるかもう一度チェック
-          if git diff --cached --quiet; then
-            echo "No changes after reset"
+
+          git commit -m "Update C# class diagrams [skip ci]" || {
+            echo "No changes to commit"
             exit 0
-          fi
-          
-          git commit -m "Update C# class diagrams [skip ci]"
-          git push origin HEAD:main
+          }
+
+          # プッシュを最大3回試行
+          for i in {1..3}; do
+            if git push origin HEAD:main; then
+              echo "✅ Push successful"
+              break
+            else
+              echo "❌ Push failed, attempt $i of 3"
+              if [ $i -lt 3 ]; then
+                echo "Fetching latest changes..."
+                git fetch origin
+                git pull origin main --no-rebase || {
+                  echo "Resolving conflicts..."
+                  git checkout --ours docs/ClassDiagrams.md
+                  git add docs/ClassDiagrams.md
+                  git commit -m "Resolve conflicts - keep generated diagrams [skip ci]" || true
+                }
+                sleep 2
+              else
+                echo "❌ Push failed after 3 attempts"
+                exit 1
+              fi
+            fi
+          done
