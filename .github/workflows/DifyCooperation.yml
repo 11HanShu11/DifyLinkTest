@@ -73,6 +73,10 @@ jobs:
 
           echo "$ALL_FILES_JSON" > docs/debug/all_files.json
 
+          # C#ファイルをJSON化してALL_FILES_JSONに
+          # ClassDiagramsMdは別途変数に
+          EXISTING_MD=$(jq -Rs . docs/ClassDiagrams.md)
+          
           # Difyへ送信（APIコール部分は既存のまま）
           RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
             --header "Authorization: Bearer ${DIFY_API_KEY}" \
@@ -80,7 +84,8 @@ jobs:
             --data-raw "{
               \"workflow_id\": \"${DIFY_WORKFLOW_ID}\", 
               \"inputs\": { 
-                \"csharp_files\": $ALL_FILES_JSON 
+                \"csharp_files\": $ALL_FILES_JSON,
+                \"ClassDiagramsMd\": $EXISTING_MD
               }, 
               \"response_mode\": \"blocking\", 
               \"user\": \"github-actions-bot\"
