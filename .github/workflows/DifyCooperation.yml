@@ -31,7 +31,6 @@ jobs:
             COUNTER=$(cat .classdiagram_counter)
           else
             COUNTER=0
-            # 初回にファイルを作る（これで以降の git add エラーを防止）
             echo "0" > .classdiagram_counter
           fi
           echo "counter=$COUNTER" >> $GITHUB_OUTPUT
@@ -48,15 +47,15 @@ jobs:
             echo "update_type=diff" >> $GITHUB_OUTPUT
           fi
 
-      # 4. Dify に送信して Mermaid 作成（デバッグ強化版）
-      - name: Generate class diagrams with Dify (Debug)
+      # 4. Dify に送信して Mermaid 作成（修正版）
+      - name: Generate class diagrams with Dify (Fixed)
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
           DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
         run: |
           mkdir -p docs/debug
-
+          
           if [ "${{ steps.determine_update.outputs.update_type }}" == "full" ]; then
             echo "Performing full generation..."
             FILES=$(find . -name "*.cs")
@@ -64,48 +63,77 @@ jobs:
             echo "Performing diff update..."
             FILES=$(git diff --name-only HEAD~1 HEAD | grep '\.cs$' || true)
           fi
+          
+          # ヘッダーを作成
+          echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
+          echo "" >> docs/ClassDiagrams.md
+          
+          # ファイルが存在するかチェック
+          if [ -z "$FILES" ]; then
+            echo "No .cs files found to process"
+            echo "No .cs files to process" >> docs/ClassDiagrams.md
+          else
+            for file in $FILES; do
+              echo "Processing $file"
+              
+              # ファイルが存在するかチェック
+              if [ ! -f "$file" ]; then
+                echo "Warning: File $file does not exist, skipping..."
+                continue
+              fi
+              
+              # JSON エスケープ
+              FILE_CONTENT=$(jq -Rs . "$file")
+              
+              # ファイル名を安全化して保存
+              SAFE_NAME=$(basename "$file" | tr '/' '_' | tr ' ' '_')
+              echo "$FILE_CONTENT" > "docs/debug/${SAFE_NAME}.json"
+              
+              # Dify API 呼び出し
+              RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+                --header "Authorization: Bearer ${DIFY_API_KEY}" \
+                --header "Content-Type: application/json" \
+                --data-raw "{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": { \"csharp_code\": $FILE_CONTENT }, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}")
+              
+              # 生レスポンスをログに出力（デバッグ用）
+              echo "API Response for $file:"
+              echo "$RESPONSE" | jq . || echo "$RESPONSE"
+              
+              # デバッグ用にレスポンスも保存
+              echo "$RESPONSE" > "docs/debug/${SAFE_NAME}_response.json"
+              
+              # Mermaid 出力を取得
+              MERMAID=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram' 2>/dev/null || echo "")
+              
+              # ファイルセクションを追加
+              echo "### $file" >> docs/ClassDiagrams.md
+              echo "<details><summary>Expand</summary>" >> docs/ClassDiagrams.md
+              echo "" >> docs/ClassDiagrams.md
+              
+              if [ -n "$MERMAID" ] && [ "$MERMAID" != "null" ] && [ "$MERMAID" != "" ]; then
+                echo '```mermaid' >> docs/ClassDiagrams.md
+                echo "$MERMAID" >> docs/ClassDiagrams.md
+                echo '```' >> docs/ClassDiagrams.md
+              else
+                ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Failed to parse response")
+                echo "*Failed to generate diagram*: $ERROR_MSG" >> docs/ClassDiagrams.md
+              fi
+              
+              echo "</details>" >> docs/ClassDiagrams.md
+              echo "" >> docs/ClassDiagrams.md
+            done
+          fi
 
-          FULL_MD="## 🤖 AI Generated C# Class Diagrams\n\n"
-
-          for file in $FILES; do
-            echo "Processing $file"
-
-            # JSON エスケープ
-            FILE_CONTENT=$(jq -Rs . "$file")
-
-            # ファイル名を安全化して保存
-            SAFE_NAME=$(basename "$file" | tr '/' '_' | tr ' ' '_')
-            echo "$FILE_CONTENT" > "docs/debug/${SAFE_NAME}.json"
-
-            # Dify API 呼び出し
-            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
-              --header "Authorization: Bearer ${DIFY_API_KEY}" \
-              --header "Content-Type: application/json" \
-              --data-raw "{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": { \"csharp_code\": $FILE_CONTENT }, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
-
-            # 生レスポンスをログに出力（デバッグ用）
-            echo "API Response for $file:"
-            echo "$RESPONSE" | jq .
-
-            # Mermaid 出力を取得
-            MERMAID=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram')
-
-            if [ -n "$MERMAID" ] && [ "$MERMAID" != "null" ]; then
-              FULL_MD+="### $file\n<details><summary>Expand</summary>\n\n\`\`\`mermaid\n$MERMAID\n\`\`\`\n</details>\n\n"
-            else
-              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-              FULL_MD+="### $file\n*Failed to generate diagram*: $ERROR_MSG\n\n"
-            fi
-          done
-
-          echo "$FULL_MD" > docs/ClassDiagrams.md
-
-      #DIFY_WORKFLOW_IDの文字数取得
+      # DIFY_WORKFLOW_IDの文字数取得
       - name: Debug workflow id
         run: |
           echo "Length of workflow id: ${#DIFY_WORKFLOW_ID}"
-          echo "Starts with: ${DIFY_WORKFLOW_ID:0:5}"
-          echo "Ends with: ${DIFY_WORKFLOW_ID: -5}"
+          if [ ${#DIFY_WORKFLOW_ID} -gt 10 ]; then
+            echo "Starts with: ${DIFY_WORKFLOW_ID:0:5}"
+            echo "Ends with: ${DIFY_WORKFLOW_ID: -5}"
+          else
+            echo "Workflow ID seems too short"
+          fi
         env:
           DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
@@ -120,12 +148,15 @@ jobs:
             echo "$COUNTER" > .classdiagram_counter
           fi
 
-       # 6. Commit & push updated Markdown and counter
+      # 6. Commit & push updated Markdown and counter
       - name: Commit & push updated Markdown and counter
         run: |
           git config user.name "github-actions-bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
           [ -f .classdiagram_counter ] || echo "0" > .classdiagram_counter
           git add docs/ClassDiagrams.md .classdiagram_counter
+          if [ -d docs/debug ]; then
+            git add docs/debug/
+          fi
           git commit -m "Update C# class diagrams [skip ci]" || echo "No changes to commit"
           git push origin HEAD:main
