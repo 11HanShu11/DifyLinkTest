@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
 
       # 2. 全C#ファイルを収集してDifyに送信
-      - name: Generate class diagrams with Dify
+      - name: Generate class diagrams with Dify (Smart Mode)
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
@@ -32,31 +32,36 @@ jobs:
         run: |
           mkdir -p docs/debug
 
-          echo "Collecting all C# files..."
-          CS_FILES=$(find . -name "*.cs" -type f)
+          # docs/ClassDiagrams.mdの有無を確認
+          if [ ! -f docs/ClassDiagrams.md ]; then
+            echo "ClassDiagrams.mdが存在しないので全.csファイルを送信します"
+            TARGET_FILES=$(find . -name "*.cs" -type f)
+          else
+            echo "ClassDiagrams.mdが存在するので差分のみ送信します"
+            # 最新コミットとの差分ファイルのみを取得（mainとの比較例）
+            CHANGED_CS=$(git diff --name-only origin/main...HEAD | grep '\.cs$' || true)
+            # docs/ClassDiagrams.mdも必ず渡す
+            if [ -f docs/ClassDiagrams.md ]; then
+              TARGET_FILES="docs/ClassDiagrams.md $CHANGED_CS"
+            else
+              TARGET_FILES="$CHANGED_CS"
+            fi
+          fi
 
-          if [ -z "$CS_FILES" ]; then
-            echo "No .cs files found"
-            echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
-            echo "" >> docs/ClassDiagrams.md
-            echo "No .cs files found to process" >> docs/ClassDiagrams.md
+          # ファイルがなければ終了
+          if [ -z "$TARGET_FILES" ]; then
+            echo "No files to process"
             exit 0
           fi
 
-          # 全ファイルの内容を1つのJSONに統合
-          echo "Combining all C# files into single payload..."
+          # 全ファイルをJSON化
           ALL_FILES_JSON="{"
           FIRST=true
 
-          for file in $CS_FILES; do
-            if [ ! -f "$file" ]; then
-              continue
-            fi
-            
-            # ファイル名をキーとして使用
+          for file in $TARGET_FILES; do
+            if [ ! -f "$file" ]; then continue; fi
             SAFE_KEY=$(echo "$file" | sed 's/[^a-zA-Z0-9]/_/g')
             FILE_CONTENT=$(jq -Rs . "$file")
-            
             if [ "$FIRST" = true ]; then
               ALL_FILES_JSON="${ALL_FILES_JSON}\"${SAFE_KEY}\": $FILE_CONTENT"
               FIRST=false
@@ -66,11 +71,9 @@ jobs:
           done
           ALL_FILES_JSON="${ALL_FILES_JSON}}"
 
-          # デバッグ用に保存
           echo "$ALL_FILES_JSON" > docs/debug/all_files.json
 
-          echo "Sending to Dify API..."
-          # Dify API呼び出し（全ファイルを一度に送信）
+          # Difyへ送信（APIコール部分は既存のまま）
           RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
             --header "Authorization: Bearer ${DIFY_API_KEY}" \
             --header "Content-Type: application/json" \
