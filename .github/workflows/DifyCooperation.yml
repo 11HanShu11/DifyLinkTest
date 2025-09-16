@@ -19,13 +19,11 @@ jobs:
       issues: write
 
     steps:
-      # 1. リポジトリチェックアウト
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. 全C#ファイルとClassDiagrams.mdの有無に応じてDify APIに送信
       - name: Generate class diagrams with Dify (Smart Mode)
         id: generate_diagram
         env:
@@ -34,7 +32,7 @@ jobs:
         run: |
           mkdir -p docs/debug
 
-          # docs/ClassDiagrams.mdの有無を確認
+          # C#ファイル収集
           if [ ! -f docs/ClassDiagrams.md ]; then
             echo "ClassDiagrams.mdが存在しないので全.csファイルを送信します"
             TARGET_CS=$(find . -name "*.cs" -type f)
@@ -46,7 +44,7 @@ jobs:
             EXISTING_MD="docs/ClassDiagrams.md"
           fi
 
-          # C#コードを連結
+          # C#コード連結
           CS_CODE=""
           for file in $TARGET_CS; do
             if [ ! -f "$file" ]; then continue; fi
@@ -54,35 +52,42 @@ jobs:
             CS_CODE="${CS_CODE}\n${CONTENT}\n"
           done
 
-          # 送信ファイルデバッグ
-          echo "$CS_CODE" > docs/debug/csharp_code.txt
+          # base64 encode for md file
           if [ -n "$EXISTING_MD" ]; then
-            cp "$EXISTING_MD" docs/debug/EXISTING_ClassDiagramsMd.md
-          fi
-
-          # Dify APIへ送信 (multipart/form-data)
-          if [ -z "$EXISTING_MD" ]; then
-            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
-              --header "Authorization: Bearer ${DIFY_API_KEY}" \
-              -F "workflow_id=${DIFY_WORKFLOW_ID}" \
-              -F "inputs[csharp_code]=${CS_CODE}" \
-              -F "response_mode=blocking" \
-              -F "user=github-actions-bot")
+            MD_BASE64=$(base64 -w 0 "$EXISTING_MD")
+            MD_JSON="\"ClassDiagramsMd\": {\"type\": \"file\", \"name\": \"ClassDiagrams.md\", \"content\": \"$MD_BASE64\"},"
           else
-            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
-              --header "Authorization: Bearer ${DIFY_API_KEY}" \
-              -F "workflow_id=${DIFY_WORKFLOW_ID}" \
-              -F "inputs[csharp_code]=${CS_CODE}" \
-              -F "inputs[ClassDiagramsMd]=@${EXISTING_MD}" \
-              -F "response_mode=blocking" \
-              -F "user=github-actions-bot")
+            MD_JSON=""
           fi
 
-          # レスポンスをログ出力
+          # JSON payload assemble
+          JSON_PAYLOAD=$(cat <<EOF
+          {
+            "workflow_id": "${DIFY_WORKFLOW_ID}",
+            "inputs": {
+              "csharp_code": $(jq -Rs . <<<"$CS_CODE"),
+              ${MD_JSON}
+              "dummy": null
+            },
+            "response_mode": "blocking",
+            "user": "github-actions-bot"
+          }
+          EOF
+          )
+
+          # Remove trailing comma+dummy for clean JSON
+          JSON_PAYLOAD=$(echo "$JSON_PAYLOAD" | sed 's/,"dummy": null//;s/"dummy": null//')
+
+          # デバッグ用保存
+          echo "$JSON_PAYLOAD" > docs/debug/dify_api_payload.json
+
+          RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+            --header "Authorization: Bearer ${DIFY_API_KEY}" \
+            --header "Content-Type: application/json" \
+            --data-raw "$JSON_PAYLOAD")
+
           echo "API Response:"
           echo "$RESPONSE" | jq . || echo "$RESPONSE"
-
-          # デバッグ用にレスポンス保存
           echo "$RESPONSE" > docs/debug/dify_response.json
 
           # Mermaid図を取得
@@ -101,8 +106,6 @@ jobs:
           if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
             echo "<details><summary>📊 Complete Class Diagram</summary>" >> docs/ClassDiagrams.md
             echo "" >> docs/ClassDiagrams.md
-            
-            # Mermaidブロックが含まれているかチェック
             if echo "$MERMAID_RESULT" | grep -q '```mermaid'; then
               echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
             else
@@ -110,7 +113,6 @@ jobs:
               echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
               echo '```' >> docs/ClassDiagrams.md
             fi
-            
             echo "" >> docs/ClassDiagrams.md
             echo "</details>" >> docs/ClassDiagrams.md
           else
@@ -130,14 +132,12 @@ jobs:
             fi
           done
 
-      # 3. 変更をコミット・プッシュ
       - name: Commit & push updated class diagram
         run: |
           git config user.name "github-actions-bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
           git config pull.rebase false
 
-          # 変更があるかチェック
           if git diff --quiet docs/ClassDiagrams.md; then
             echo "No changes to commit"
             exit 0
@@ -153,7 +153,6 @@ jobs:
             exit 0
           }
 
-          # プッシュを最大3回試行
           for i in {1..3}; do
             if git push origin HEAD:main; then
               echo "✅ Push successful"
