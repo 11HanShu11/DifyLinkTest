@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - "**.cs"
+      - "docs/ClassDiagrams.md"
   pull_request:
     paths:
       - "**.cs"
+      - "docs/ClassDiagrams.md"
 
 jobs:
   generate-diagram:
@@ -23,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. 全C#ファイルを収集してDifyに送信
+      # 2. 全C#ファイルとClassDiagrams.mdの有無に応じてDify APIに送信
       - name: Generate class diagrams with Dify (Smart Mode)
         id: generate_diagram
         env:
@@ -35,72 +37,46 @@ jobs:
           # docs/ClassDiagrams.mdの有無を確認
           if [ ! -f docs/ClassDiagrams.md ]; then
             echo "ClassDiagrams.mdが存在しないので全.csファイルを送信します"
-            TARGET_FILES=$(find . -name "*.cs" -type f)
+            TARGET_CS=$(find . -name "*.cs" -type f)
+            EXISTING_MD=""
           else
             echo "ClassDiagrams.mdが存在するので差分のみ送信します"
-            # 最新コミットとの差分ファイルのみを取得（mainとの比較例）
             CHANGED_CS=$(git diff --name-only origin/main...HEAD | grep '\.cs$' || true)
-            # docs/ClassDiagrams.mdも必ず渡す
-            if [ -f docs/ClassDiagrams.md ]; then
-              TARGET_FILES="docs/ClassDiagrams.md $CHANGED_CS"
-            else
-              TARGET_FILES="$CHANGED_CS"
-            fi
+            TARGET_CS="$CHANGED_CS"
+            EXISTING_MD="docs/ClassDiagrams.md"
           fi
 
-          # ファイルがなければ終了
-          if [ -z "$TARGET_FILES" ]; then
-            echo "No files to process"
-            exit 0
-          fi
-
-          # 全ファイルをJSON化
-          ALL_FILES_JSON="{"
-          FIRST=true
-
-          for file in $TARGET_FILES; do
-            if [ ! -f "$file" ]; then continue; fi
-            SAFE_KEY=$(echo "$file" | sed 's/[^a-zA-Z0-9]/_/g')
-            FILE_CONTENT=$(jq -Rs . "$file")
-            if [ "$FIRST" = true ]; then
-              ALL_FILES_JSON="${ALL_FILES_JSON}\"${SAFE_KEY}\": $FILE_CONTENT"
-              FIRST=false
-            else
-              ALL_FILES_JSON="${ALL_FILES_JSON}, \"${SAFE_KEY}\": $FILE_CONTENT"
-            fi
-          done
-          ALL_FILES_JSON="${ALL_FILES_JSON}}"
-
-          echo "$ALL_FILES_JSON" > docs/debug/all_files.json
-
-          # C#ファイルをJSON化してALL_FILES_JSONに
+          # C#コードを連結
           CS_CODE=""
-          for file in $TARGET_FILES; do
+          for file in $TARGET_CS; do
             if [ ! -f "$file" ]; then continue; fi
-            if [[ "$file" == *.cs ]]; then
-              CONTENT=$(cat "$file")
-              CS_CODE="${CS_CODE}\n${CONTENT}\n"
-            fi
+            CONTENT=$(cat "$file")
+            CS_CODE="${CS_CODE}\n${CONTENT}\n"
           done
-          CS_CODE_JSON=$(printf "%s" "$CS_CODE" | jq -Rs .)
 
-          EXISTING_MD=""
-          if [ -f docs/ClassDiagrams.md ]; then
-            EXISTING_MD=$(jq -Rs . docs/ClassDiagrams.md)
+          # 送信ファイルデバッグ
+          echo "$CS_CODE" > docs/debug/csharp_code.txt
+          if [ -n "$EXISTING_MD" ]; then
+            cp "$EXISTING_MD" docs/debug/EXISTING_ClassDiagramsMd.md
           fi
-          # Difyへ送信（APIコール部分は既存のまま）
-          RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
-            --header "Authorization: Bearer ${DIFY_API_KEY}" \
-            --header "Content-Type: application/json" \
-            --data-raw "{
-              \"workflow_id\": \"${DIFY_WORKFLOW_ID}\", 
-              \"inputs\": { 
-                \"csharp_code\": $CS_CODE_JSON,
-                \"ClassDiagramsMd\": $EXISTING_MD
-              }, 
-              \"response_mode\": \"blocking\", 
-              \"user\": \"github-actions-bot\"
-            }")
+
+          # Dify APIへ送信 (multipart/form-data)
+          if [ -z "$EXISTING_MD" ]; then
+            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+              --header "Authorization: Bearer ${DIFY_API_KEY}" \
+              -F "workflow_id=${DIFY_WORKFLOW_ID}" \
+              -F "inputs[csharp_code]=${CS_CODE}" \
+              -F "response_mode=blocking" \
+              -F "user=github-actions-bot")
+          else
+            RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+              --header "Authorization: Bearer ${DIFY_API_KEY}" \
+              -F "workflow_id=${DIFY_WORKFLOW_ID}" \
+              -F "inputs[csharp_code]=${CS_CODE}" \
+              -F "inputs[ClassDiagramsMd]=@${EXISTING_MD}" \
+              -F "response_mode=blocking" \
+              -F "user=github-actions-bot")
+          fi
 
           # レスポンスをログ出力
           echo "API Response:"
@@ -109,14 +85,18 @@ jobs:
           # デバッグ用にレスポンス保存
           echo "$RESPONSE" > docs/debug/dify_response.json
 
+          # Mermaid図を取得
+          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.result' 2>/dev/null || echo "")
+
           # 結果をマークダウンに変換
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          echo "*Generated from all C# files in the repository*" >> docs/ClassDiagrams.md
+          if [ -z "$EXISTING_MD" ]; then
+            echo "*Generated from all C# files in the repository*" >> docs/ClassDiagrams.md
+          else
+            echo "*Generated from changes and existing class diagram*" >> docs/ClassDiagrams.md
+          fi
           echo "" >> docs/ClassDiagrams.md
-
-          # Mermaid図を取得
-          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.result' 2>/dev/null || echo "")
 
           if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
             echo "<details><summary>📊 Complete Class Diagram</summary>" >> docs/ClassDiagrams.md
@@ -144,7 +124,7 @@ jobs:
           echo "" >> docs/ClassDiagrams.md
           echo "### 📁 Processed Files" >> docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          for file in $CS_FILES; do
+          for file in $TARGET_CS; do
             if [ -f "$file" ]; then
               echo "- \`$file\`" >> docs/ClassDiagrams.md
             fi
@@ -185,7 +165,6 @@ jobs:
                 git fetch origin
                 git pull origin main --no-rebase || {
                   echo "Resolving conflicts (ours for all unmerged files)..."
-                  # 競合ファイルを全てours優先で自動解決
                   for f in $(git diff --name-only --diff-filter=U); do
                     git checkout --ours -- "$f"
                     git add "$f"
