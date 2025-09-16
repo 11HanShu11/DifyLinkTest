@@ -74,9 +74,20 @@ jobs:
           echo "$ALL_FILES_JSON" > docs/debug/all_files.json
 
           # C#ファイルをJSON化してALL_FILES_JSONに
-          # ClassDiagramsMdは別途変数に
-          EXISTING_MD=$(jq -Rs . docs/ClassDiagrams.md)
-          
+          CS_CODE=""
+          for file in $TARGET_FILES; do
+            if [ ! -f "$file" ]; then continue; fi
+            if [[ "$file" == *.cs ]]; then
+              CONTENT=$(cat "$file")
+              CS_CODE="${CS_CODE}\n${CONTENT}\n"
+            fi
+          done
+          CS_CODE_JSON=$(printf "%s" "$CS_CODE" | jq -Rs .)
+
+          EXISTING_MD=""
+          if [ -f docs/ClassDiagrams.md ]; then
+            EXISTING_MD=$(jq -Rs . docs/ClassDiagrams.md)
+          fi
           # Difyへ送信（APIコール部分は既存のまま）
           RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
             --header "Authorization: Bearer ${DIFY_API_KEY}" \
@@ -84,7 +95,7 @@ jobs:
             --data-raw "{
               \"workflow_id\": \"${DIFY_WORKFLOW_ID}\", 
               \"inputs\": { 
-                \"csharp_files\": $ALL_FILES_JSON,
+                \"csharp_code\": $CS_CODE_JSON,
                 \"ClassDiagramsMd\": $EXISTING_MD
               }, 
               \"response_mode\": \"blocking\", 
