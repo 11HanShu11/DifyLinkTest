@@ -1,0 +1,1 @@
+"using UnityEngine;\n\npublic class SugorokuModel : MonoBehaviour\n{\n    public int DiceValue { get; set; }\n    public int DiceTotal { get; set; }\n    public int PieceTileIndex { get; set; }\n}\n"
