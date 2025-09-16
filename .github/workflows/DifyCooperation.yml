@@ -52,34 +52,45 @@ jobs:
             CS_CODE="${CS_CODE}\n${CONTENT}\n"
           done
 
-          # base64 encode for md file
+          # base64 encode for md file (改行無し)
           if [ -n "$EXISTING_MD" ]; then
             MD_BASE64=$(base64 -w 0 "$EXISTING_MD")
-            MD_JSON="\"ClassDiagramsMd\": {\"type\": \"file\", \"name\": \"ClassDiagrams.md\", \"content\": \"$MD_BASE64\"},"
+            MD_JSON="\"ClassDiagramsMd\": {\"type\": \"file\", \"name\": \"ClassDiagrams.md\", \"content\": \"$MD_BASE64\"}"
           else
             MD_JSON=""
           fi
 
-          # JSON payload assemble
-          JSON_PAYLOAD=$(cat <<EOF
+          # JSON payload assemble（条件でカンマの有無を制御）
+          if [ -n "$MD_JSON" ]; then
+            INPUTS=$(cat <<EOF
+          {
+            "csharp_code": $(jq -Rs . <<<"$CS_CODE"),
+            $MD_JSON
+          }
+          EOF
+          )
+                    else
+                      INPUTS=$(cat <<EOF
+          {
+            "csharp_code": $(jq -Rs . <<<"$CS_CODE")
+          }
+          EOF
+          )
+                    fi
+
+                    JSON_PAYLOAD=$(cat <<EOF
           {
             "workflow_id": "${DIFY_WORKFLOW_ID}",
-            "inputs": {
-              "csharp_code": $(jq -Rs . <<<"$CS_CODE"),
-              ${MD_JSON}
-              "dummy": null
-            },
+            "inputs": $INPUTS,
             "response_mode": "blocking",
             "user": "github-actions-bot"
           }
           EOF
           )
 
-          # Remove trailing comma+dummy for clean JSON
-          JSON_PAYLOAD=$(echo "$JSON_PAYLOAD" | sed 's/,"dummy": null//;s/"dummy": null//')
-
           # デバッグ用保存
           echo "$JSON_PAYLOAD" > docs/debug/dify_api_payload.json
+          echo "$JSON_PAYLOAD" | jq . # 構文チェック
 
           RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
             --header "Authorization: Bearer ${DIFY_API_KEY}" \
