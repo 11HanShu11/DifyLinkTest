@@ -61,32 +61,14 @@ jobs:
           fi
 
           # JSON payload assemble（条件でカンマの有無を制御）
-          if [ -n "$MD_JSON" ]; then
-            INPUTS=$(cat <<EOF
-          {
-            "csharp_code": $(jq -Rs . <<<"$CS_CODE"),
-            $MD_JSON
-          }
-          EOF
-          )
-                    else
-                      INPUTS=$(cat <<EOF
-          {
-            "csharp_code": $(jq -Rs . <<<"$CS_CODE")
-          }
-          EOF
-          )
-                    fi
+          INPUTS="{\"csharp_code\": $(jq -Rs . <<<"$CS_CODE")"
+          if [ -n "$EXISTING_MD" ]; then
+            MD_BASE64=$(base64 -w 0 "$EXISTING_MD")
+            INPUTS="$INPUTS, \"ClassDiagramsMd\": {\"type\": \"file\", \"name\": \"ClassDiagrams.md\", \"content\": \"$MD_BASE64\"}"
+          fi
+          INPUTS="$INPUTS}"
 
-                    JSON_PAYLOAD=$(cat <<EOF
-          {
-            "workflow_id": "${DIFY_WORKFLOW_ID}",
-            "inputs": $INPUTS,
-            "response_mode": "blocking",
-            "user": "github-actions-bot"
-          }
-          EOF
-          )
+          JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
 
           # デバッグ用保存
           echo "$JSON_PAYLOAD" > docs/debug/dify_api_payload.json
