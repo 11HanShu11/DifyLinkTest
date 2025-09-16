@@ -1,1 +1,11 @@
-## 🤖 AI Generated C# Class Diagrams\n\n### main/DifyTest_RollingDice.cs\n*Failed to generate diagram*\n\n
+## 🤖 AI Generated C# Class Diagrams
+
+*Generated from changes and existing class diagram*
+
+❌ **Failed to generate class diagram**
+
+Error: Unknown error
+
+### 📁 Processed Files
+
+- `main/RollingDice.cs`
