@@ -60,12 +60,18 @@ jobs:
             MD_JSON=""
           fi
 
-          # JSON payload assemble（条件でカンマの有無を制御）
+          # JSON payload assemble
           INPUTS="{\"csharp_code\": $(jq -Rs . <<<"$CS_CODE")"
+
+          # 既存のClassDiagramsMd（任意）
           if [ -n "$EXISTING_MD" ]; then
             MD_BASE64=$(base64 -w 0 "$EXISTING_MD")
             INPUTS="$INPUTS, \"ClassDiagramsMd\": {\"type\": \"file\", \"name\": \"ClassDiagrams.md\", \"content\": \"$MD_BASE64\"}"
           fi
+
+          # sys.* フィールドを適当な値で追加
+          INPUTS="$INPUTS, \"sys.user_id\": \"github-actions-bot\", \"sys.app_id\": \"dummy-app-id\", \"sys.workflow_id\": \"dummy-workflow-id\", \"sys.workflow_run_id\": \"dummy-run-id\""
+
           INPUTS="$INPUTS}"
 
           JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
