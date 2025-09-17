@@ -98,19 +98,22 @@ jobs:
           JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
           echo "$JSON_PAYLOAD" | jq . # 構文チェック
           
-          # Difyへ送信（APIコール部分は既存のまま）
+
+          # ============修正============
+          # テスト用に短いコードだけ送信
+          CS_CODE_JSON=$(jq -Rs . <<<"public class Test {}")
+          INPUTS="{\"csharp_code\": $CS_CODE_JSON}"
+
           RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
             --header "Authorization: Bearer ${DIFY_API_KEY}" \
             --header "Content-Type: application/json" \
             --data-raw "{
-              \"workflow_id\": \"${DIFY_WORKFLOW_ID}\", 
-              \"inputs\": { 
-                \"csharp_code\": $CS_CODE_JSON,
-                \"ClassDiagramsMd\": $EXISTING_MD
-              }, 
-              \"response_mode\": \"blocking\", 
+              \"workflow_id\": \"${DIFY_WORKFLOW_ID}\",
+              \"inputs\": $INPUTS,
+              \"response_mode\": \"blocking\",
               \"user\": \"github-actions-bot\"
             }")
+          # ============修正============
 
           # レスポンスをログ出力
           echo "API Response:"
