@@ -17,13 +17,7 @@ namespace Sugoroku
         [SerializeField] private List<Sprite> _diceSprites; // 0〜5: サイコロ目1〜6
         [SerializeField] private Image _diceDisplay;
         [SerializeField] private Button _diceBtn;
-        [SerializeField] private Button _testBtn;
-<<<<<<< HEAD
-=======
-        [SerializeField] private Button _Btn;
-
-
->>>>>>> 9d8d520
+        // [SerializeField] private Button _testBtn;
 
         private readonly Subject<int> _diceResult = new Subject<int>();
         public IObservable<int> DiceResult => _diceResult;
