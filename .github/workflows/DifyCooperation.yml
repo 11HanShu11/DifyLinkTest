@@ -41,9 +41,9 @@ jobs:
         if: steps.changed-files.outputs.has_changes == 'true'
         id: analysis
         run: |
-          final_report="## :robot: Dify AI Code Analysis Report (C#)\n\n"
-          
-          # ★★★ 修正点2: APIエンドポイントを固定 ★★★
+          # JSON形式で解析結果をまとめるための配列を初期化
+          json_results="[]"
+
           API_ENDPOINT="${DIFY_API_BASE_URL}/workflows/run"
           echo "Using Dify API Endpoint: $API_ENDPOINT"
 
@@ -52,21 +52,17 @@ jobs:
             
             encoded_content=$(base64 -w 0 "$file")
             
-            # ★★★ 修正点3: jqを使ってJSONペイロードにworkflow_idを追加 ★★★
             json_payload=$(jq -n \
               --arg ec "$encoded_content" \
               --arg user "github-actions-${{ github.actor }}" \
               --arg workflow_id "$DIFY_WORKFLOW_ID" \
               '{
-                "inputs": {
-                  "encoded_script": $ec
-                },
+                "inputs": { "encoded_script": $ec },
                 "response_mode": "blocking",
                 "user": $user,
                 "workflow_id": $workflow_id
               }')
             
-            # DifyのワークフローAPIを呼び出す
             api_response=$(curl --location --request POST "$API_ENDPOINT" \
               --header "Authorization: Bearer $DIFY_API_KEY" \
               --header 'Content-Type: application/json' \
@@ -78,25 +74,45 @@ jobs:
             echo "----------------------------------------"
             
             mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
-          
-            final_report+="### Analysis for \\\`$file\\\`\n\n"
-            final_report+="**Mermaid Class Diagram:**\n\`\`\`mermaid\n${mermaid_diagram}\n\`\`\`\n\n---\n"
+            
+            # ★★★ 変更点 ★★★
+            # ファイルごとの結果をJSONオブジェクトとして作成し、配列に追加する
+            result_obj=$(jq -n \
+              --arg file "$file" \
+              --arg mermaid "$mermaid_diagram" \
+              '{ "file": $file, "mermaid": $mermaid }')
+            
+            json_results=$(echo "$json_results" | jq --argjson obj "$result_obj" '. + [$obj]')
           done
-          
-          echo "report<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$final_report" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+
+          # 最終的なJSON配列を後続のステップに渡す
+          echo "results_json=$(echo $json_results | jq -c .)" >> $GITHUB_OUTPUT
 
       - name: Post analysis result to Pull Request
         if: steps.changed-files.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            // コメント投稿のロジックは変更なし
-            const report = `${{ steps.analysis.outputs.report }}`;
+            // ステップ1: 前のステップからJSON形式の結果を受け取り、パースする
+            const results = JSON.parse('${{ steps.analysis.outputs.results_json }}');
             const { owner, repo, number } = context.issue;
+
+            // ステップ2: JavaScript内で安全にレポートのMarkdownを組み立てる
+            let report = "## :robot: Dify AI Code Analysis Report (C#)\n\n";
+
+            for (const result of results) {
+              // ここでバッククォートを使っても、JavaScriptのテンプレートリテラル内なので安全
+              report += `### Analysis for \`${result.file}\`\n\n`;
+              report += `**Mermaid Class Diagram:**\n`;
+              report += `\`\`\`mermaid\n`;
+              report += `${result.mermaid}\n`; // Difyからの結果を挿入
+              report += `\`\`\`\n\n---\n`;
+            }
+
+            // ステップ3: コメントを投稿または更新する（このロジックは変更なし）
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: number });
             const botComment = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes('Dify AI Code Analysis Report'));
+
             if (botComment) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body: report });
             } else {
