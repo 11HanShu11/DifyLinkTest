@@ -54,7 +54,7 @@ jobs:
             fi
           done
 
-          INPUTS="{\"csharp_code\": [$FILE_ARRAY]}"
+          INPUTS="{\"csharp_files\": [$FILE_ARRAY]}"
 
           JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
           echo "$JSON_PAYLOAD" | jq . # 構文チェック
