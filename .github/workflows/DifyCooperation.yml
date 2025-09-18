@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize]
     paths:
-      - '**.cs'
+      - "**.cs"
 
 # ★★★ 変更点1: リポジトリへの書き込み権限を追加 ★★★
 permissions:
@@ -20,12 +20,12 @@ jobs:
       DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
     steps:
-      # ステップ1: リポジトリのコードをチェックアウト
+      # ★★★ ここを修正 ★★★
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # プッシュするために、アクションを実行しているユーザーのトークンを使用
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0 # プルリクエストの差分を正しく取得するために全履歴をフェッチ
 
       # ステップ2: 変更されたC#ファイルの一覧を取得
       - name: Get changed C# files
@@ -70,7 +70,7 @@ jobs:
           done
 
           echo "results_json=$(echo $json_results | jq -c .)" >> $GITHUB_OUTPUT
-          
+
       # ★★★ 変更点2: 新しいステップ「レポートファイル作成」 ★★★
       # 解析結果のJSONからMarkdownファイルを生成する
       - name: Create Markdown Report File
@@ -82,7 +82,7 @@ jobs:
             const fs = require('fs');
             const path = require('path');
             const results = JSON.parse('${{ steps.analysis.outputs.results_json }}');
-            
+
             // ファイル名をプルリクエスト番号に基づいて動的に生成
             const pr_number = context.issue.number;
             const outputDir = 'docs/debug';
@@ -102,11 +102,11 @@ jobs:
             // ディレクトリを作成し、ファイルを書き込む
             fs.mkdirSync(outputDir, { recursive: true });
             fs.writeFileSync(outputPath, report);
-            
+
             console.log(`Report generated at: ${outputPath}`);
             // 後続のステップで使えるようにファイルパスを出力
             core.setOutput('report_path', outputPath);
-      
+
       # ★★★ 変更点3: 新しいステップ「レポートファイルをコミット＆プッシュ」 ★★★
       # 生成されたMarkdownファイルをリポジトリにコミットしてプッシュする
       - name: Commit and Push Report File
