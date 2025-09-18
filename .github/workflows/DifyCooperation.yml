@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize]
     paths:
-      - '**.cs'
+      - "**.cs"
 
 # ★★★ 変更点1: リポジトリへの書き込み権限を追加 ★★★
 permissions:
@@ -20,12 +20,12 @@ jobs:
       DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
     steps:
-      # ステップ1: リポジトリのコードをチェックアウト
+      # ★★★ ここを修正 ★★★
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # プッシュするために、アクションを実行しているユーザーのトークンを使用
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0 # プルリクエストの差分を正しく取得するために全履歴をフェッチ
 
       # ステップ2: 変更されたC#ファイルの一覧を取得
       - name: Get changed C# files
@@ -46,6 +46,7 @@ jobs:
         if: steps.changed-files.outputs.has_changes == 'true'
         id: analysis
         run: |
+          # JSON形式で解析結果をまとめるための配列を初期化
           json_results="[]"
           API_ENDPOINT="${DIFY_API_BASE_URL}/workflows/run"
           echo "Using Dify API Endpoint: $API_ENDPOINT"
@@ -53,7 +54,16 @@ jobs:
           for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
             encoded_content=$(base64 -w 0 "$file")
             json_payload=$(jq -n --arg ec "$encoded_content" --arg user "github-actions-${{ github.actor }}" --arg workflow_id "$DIFY_WORKFLOW_ID" '{"inputs": {"encoded_script": $ec},"response_mode": "blocking","user": $user,"workflow_id": $workflow_id}')
+            
+            # DifyのワークフローAPIを呼び出す
             api_response=$(curl -s -L -X POST "$API_ENDPOINT" -H "Authorization: Bearer $DIFY_API_KEY" -H 'Content-Type: application/json' -d "$json_payload")
+            
+            # ★★★ ここからが修正箇所 ★★★
+            # Difyからの生レスポンスをご希望の形式でログに出力します
+            echo "API Response:"
+            echo "$api_response" | jq . # jq . でJSONを整形して表示
+            # ★★★ ここまで ★★★
+
             mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
             result_obj=$(jq -n --arg file "$file" --arg mermaid "$mermaid_diagram" '{ "file": $file, "mermaid": $mermaid }')
             json_results=$(echo "$json_results" | jq --argjson obj "$result_obj" '. + [$obj]')
@@ -72,7 +82,7 @@ jobs:
             const fs = require('fs');
             const path = require('path');
             const results = JSON.parse('${{ steps.analysis.outputs.results_json }}');
-            
+
             // ファイル名をプルリクエスト番号に基づいて動的に生成
             const pr_number = context.issue.number;
             const outputDir = 'docs/debug';
@@ -92,11 +102,11 @@ jobs:
             // ディレクトリを作成し、ファイルを書き込む
             fs.mkdirSync(outputDir, { recursive: true });
             fs.writeFileSync(outputPath, report);
-            
+
             console.log(`Report generated at: ${outputPath}`);
             // 後続のステップで使えるようにファイルパスを出力
             core.setOutput('report_path', outputPath);
-      
+
       # ★★★ 変更点3: 新しいステップ「レポートファイルをコミット＆プッシュ」 ★★★
       # 生成されたMarkdownファイルをリポジトリにコミットしてプッシュする
       - name: Commit and Push Report File
