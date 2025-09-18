@@ -78,8 +78,8 @@ jobs:
             echo "----------------------------------------"
             
             mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
-            
-            final_report+="### Analysis for \`$file\`\n\n"
+          
+            final_report+="### Analysis for \\\`$file\\\`\n\n"
             final_report+="**Mermaid Class Diagram:**\n\`\`\`mermaid\n${mermaid_diagram}\n\`\`\`\n\n---\n"
           done
           
