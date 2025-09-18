@@ -18,6 +18,9 @@ namespace Sugoroku
         [SerializeField] private Image _diceDisplay;
         [SerializeField] private Button _diceBtn;
         [SerializeField] private Button _testBtn;
+        [SerializeField] private Button _Btn;
+
+
 
         private readonly Subject<int> _diceResult = new Subject<int>();
         public IObservable<int> DiceResult => _diceResult;

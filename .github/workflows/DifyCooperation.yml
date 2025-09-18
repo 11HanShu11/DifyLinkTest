@@ -4,12 +4,11 @@ on:
   pull_request:
     types: [opened, synchronize]
     paths:
-      - "**.cs"
+      - '**.cs'
 
-# ★★★ 変更点1: リポジトリへの書き込み権限を追加 ★★★
 permissions:
-  contents: write # 生成したファイルをプッシュするために必要
-  pull-requests: write # (オプション) PRへのコメントも残したい場合に備えて
+  contents: write
+  pull-requests: read # Read permission is sufficient if only reading PR context
 
 jobs:
   analyze_and_create_report:
@@ -20,12 +19,12 @@ jobs:
       DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
     steps:
-      # ★★★ ここを修正 ★★★
+      # ステップ1: リポジトリのコードをチェックアウト
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0 # プルリクエストの差分を正しく取得するために全履歴をフェッチ
+          fetch-depth: 0
 
       # ステップ2: 変更されたC#ファイルの一覧を取得
       - name: Get changed C# files
@@ -41,28 +40,37 @@ jobs:
             echo "files_json=$(echo "$files" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
           fi
 
-      # ステップ3: 変更された各ファイルをDify APIで解析し、結果をJSONで出力
+      # ステップ3: Dify APIで各ファイルを解析し、結果をJSONで出力
       - name: Analyze each file with Dify API
         if: steps.changed-files.outputs.has_changes == 'true'
         id: analysis
         run: |
-          # JSON形式で解析結果をまとめるための配列を初期化
           json_results="[]"
           API_ENDPOINT="${DIFY_API_BASE_URL}/workflows/run"
           echo "Using Dify API Endpoint: $API_ENDPOINT"
 
           for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
             encoded_content=$(base64 -w 0 "$file")
-            json_payload=$(jq -n --arg ec "$encoded_content" --arg user "github-actions-${{ github.actor }}" --arg workflow_id "$DIFY_WORKFLOW_ID" '{"inputs": {"encoded_script": $ec},"response_mode": "blocking","user": $user,"workflow_id": $workflow_id}')
             
-            # DifyのワークフローAPIを呼び出す
+            # ★★★ ここがリファクタリングの核心 ★★★
+            # Difyの開始ノードで定義した変数名 'encoded_script' に合わせてキーを変更します。
+            json_payload=$(jq -n \
+              --arg ec "$encoded_content" \
+              --arg user "github-actions-${{ github.actor }}" \
+              --arg workflow_id "$DIFY_WORKFLOW_ID" \
+              '{
+                "inputs": {
+                  "encoded_script": $ec
+                },
+                "response_mode": "blocking",
+                "user": $user,
+                "workflow_id": $workflow_id
+              }')
+
             api_response=$(curl -s -L -X POST "$API_ENDPOINT" -H "Authorization: Bearer $DIFY_API_KEY" -H 'Content-Type: application/json' -d "$json_payload")
             
-            # ★★★ ここからが修正箇所 ★★★
-            # Difyからの生レスポンスをご希望の形式でログに出力します
-            echo "API Response:"
-            echo "$api_response" | jq . # jq . でJSONを整形して表示
-            # ★★★ ここまで ★★★
+            echo "API Response for ${file}:"
+            echo "$api_response" | jq .
 
             mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
             result_obj=$(jq -n --arg file "$file" --arg mermaid "$mermaid_diagram" '{ "file": $file, "mermaid": $mermaid }')
@@ -71,50 +79,40 @@ jobs:
 
           echo "results_json=$(echo $json_results | jq -c .)" >> $GITHUB_OUTPUT
 
-      # ★★★ 変更点2: 新しいステップ「レポートファイル作成」 ★★★
-      # 解析結果のJSONからMarkdownファイルを生成する
-      - name: Create Markdown Report File
+      # ステップ4: 解析結果からクラス図ファイルを個別に作成
+      - name: Create Individual Markdown Report Files
         if: steps.analysis.outputs.results_json
-        id: create_report
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const path = require('path');
             const results = JSON.parse('${{ steps.analysis.outputs.results_json }}');
-
-            // ファイル名をプルリクエスト番号に基づいて動的に生成
-            const pr_number = context.issue.number;
-            const outputDir = 'docs/debug';
-            const outputFile = `pr-${pr_number}-report.md`;
-            const outputPath = path.join(outputDir, outputFile);
-
-            let report = `# :robot: Dify AI Code Analysis Report for PR #${pr_number}\n\n`;
+            const outputBaseDir = 'docs/diagrams';
 
             for (const result of results) {
-              report += `## Analysis for \`${result.file}\`\n\n`;
-              report += `### Mermaid Class Diagram\n`;
+              const originalFilePath = result.file;
+              const markdownFilePath = originalFilePath.replace(/\.cs$/, '.md');
+              const outputPath = path.join(outputBaseDir, markdownFilePath);
+              
+              let report = `# Class Diagram for \`${originalFilePath}\`\n\n`;
               report += `\`\`\`mermaid\n`;
               report += `${result.mermaid || 'No diagram generated.'}\n`;
-              report += `\`\`\`\n\n---\n`;
+              report += `\`\`\`\n`;
+
+              const outputDirForFile = path.dirname(outputPath);
+              fs.mkdirSync(outputDirForFile, { recursive: true });
+              fs.writeFileSync(outputPath, report);
+              console.log(`Report generated at: ${outputPath}`);
             }
-
-            // ディレクトリを作成し、ファイルを書き込む
-            fs.mkdirSync(outputDir, { recursive: true });
-            fs.writeFileSync(outputPath, report);
-
-            console.log(`Report generated at: ${outputPath}`);
-            // 後続のステップで使えるようにファイルパスを出力
-            core.setOutput('report_path', outputPath);
-
-      # ★★★ 変更点3: 新しいステップ「レポートファイルをコミット＆プッシュ」 ★★★
-      # 生成されたMarkdownファイルをリポジトリにコミットしてプッシュする
-      - name: Commit and Push Report File
-        if: steps.create_report.outputs.report_path
+      
+      # ステップ5: レポートファイルをコミット＆プッシュ
+      - name: Commit and Push Report Files
+        if: steps.analysis.outputs.results_json
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "docs(ai): Generate AI analysis report for PR #${{ github.event.pull_request.number }}"
-          file_pattern: "docs/debug/*.md"
+          commit_message: "docs(ai): Update class diagrams based on code changes"
+          file_pattern: "docs/diagrams/**/*.md"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
           commit_author: "${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>"
