@@ -38,14 +38,14 @@ jobs:
             exit 0
           fi
 
-          # .csファイルを一時的に.txt名でAPIペイロード化
+          # テキスト型inputsのJSON組み立て
           FILE_ARRAY=""
           FIRST=true
           for file in $TARGET_FILES; do
-            # 拡張子だけtxtに変換（元のファイル名はそのままでも良い）
             BASENAME_TXT="$(basename "$file" .cs).txt"
+            # UTF-8テキストとしてbase64エンコード
             BASE64_CONTENT=$(base64 -w 0 "$file")
-            FILE_JSON="{\"type\": \"file\", \"name\": \"$BASENAME_TXT\", \"content\": \"$BASE64_CONTENT\"}"
+            FILE_JSON="{\"type\": \"document\", \"name\": \"$BASENAME_TXT\", \"content\": \"$BASE64_CONTENT\"}"
             if [ "$FIRST" = true ]; then
               FILE_ARRAY="$FILE_JSON"
               FIRST=false
