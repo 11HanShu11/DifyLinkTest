@@ -1,4 +1,4 @@
-name: Dify AI Code Analysis for C# (ID Method)
+name: Dify AI Code Analysis to MD File
 
 on:
   pull_request:
@@ -6,24 +6,28 @@ on:
     paths:
       - '**.cs'
 
+# ★★★ 変更点1: リポジトリへの書き込み権限を追加 ★★★
 permissions:
-  pull-requests: write
+  contents: write # 生成したファイルをプッシュするために必要
+  pull-requests: write # (オプション) PRへのコメントも残したい場合に備えて
 
 jobs:
-  analyze_cs_code_with_dify:
+  analyze_and_create_report:
     runs-on: ubuntu-latest
     env:
-      # ★★★ 修正点1: 使用するシークレットを2つに分割 ★★★
       DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
-      DIFY_API_BASE_URL: ${{ secrets.DIFY_API_BASE_URL }} # 例: https://api.dify.ai/v1
-      DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}   # ワークフローIDのみ
+      DIFY_API_BASE_URL: ${{ secrets.DIFY_API_BASE_URL }}
+      DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
     steps:
+      # ステップ1: リポジトリのコードをチェックアウト
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # プッシュするために、アクションを実行しているユーザーのトークンを使用
+          token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ステップ2: 変更されたC#ファイルの一覧を取得
       - name: Get changed C# files
         id: changed-files
         run: |
@@ -37,84 +41,70 @@ jobs:
             echo "files_json=$(echo "$files" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
           fi
 
+      # ステップ3: 変更された各ファイルをDify APIで解析し、結果をJSONで出力
       - name: Analyze each file with Dify API
         if: steps.changed-files.outputs.has_changes == 'true'
         id: analysis
         run: |
-          # JSON形式で解析結果をまとめるための配列を初期化
           json_results="[]"
-
           API_ENDPOINT="${DIFY_API_BASE_URL}/workflows/run"
           echo "Using Dify API Endpoint: $API_ENDPOINT"
 
           for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
-            echo "--- Analyzing $file ---"
-            
             encoded_content=$(base64 -w 0 "$file")
-            
-            json_payload=$(jq -n \
-              --arg ec "$encoded_content" \
-              --arg user "github-actions-${{ github.actor }}" \
-              --arg workflow_id "$DIFY_WORKFLOW_ID" \
-              '{
-                "inputs": { "encoded_script": $ec },
-                "response_mode": "blocking",
-                "user": $user,
-                "workflow_id": $workflow_id
-              }')
-            
-            api_response=$(curl --location --request POST "$API_ENDPOINT" \
-              --header "Authorization: Bearer $DIFY_API_KEY" \
-              --header 'Content-Type: application/json' \
-              --data "$json_payload" \
-              --silent)
-              
-            echo "--- Raw Dify API Response for $file ---"
-            echo "$api_response"
-            echo "----------------------------------------"
-            
+            json_payload=$(jq -n --arg ec "$encoded_content" --arg user "github-actions-${{ github.actor }}" --arg workflow_id "$DIFY_WORKFLOW_ID" '{"inputs": {"encoded_script": $ec},"response_mode": "blocking","user": $user,"workflow_id": $workflow_id}')
+            api_response=$(curl -s -L -X POST "$API_ENDPOINT" -H "Authorization: Bearer $DIFY_API_KEY" -H 'Content-Type: application/json' -d "$json_payload")
             mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
-            
-            # ★★★ 変更点 ★★★
-            # ファイルごとの結果をJSONオブジェクトとして作成し、配列に追加する
-            result_obj=$(jq -n \
-              --arg file "$file" \
-              --arg mermaid "$mermaid_diagram" \
-              '{ "file": $file, "mermaid": $mermaid }')
-            
+            result_obj=$(jq -n --arg file "$file" --arg mermaid "$mermaid_diagram" '{ "file": $file, "mermaid": $mermaid }')
             json_results=$(echo "$json_results" | jq --argjson obj "$result_obj" '. + [$obj]')
           done
 
-          # 最終的なJSON配列を後続のステップに渡す
           echo "results_json=$(echo $json_results | jq -c .)" >> $GITHUB_OUTPUT
 
-      - name: Post analysis result to Pull Request
-        if: steps.changed-files.outputs.has_changes == 'true'
+      # ★★★ 変更点2: 新しいステップ「レポートファイル作成」 ★★★
+      # 解析結果のJSONからMarkdownファイルを生成する
+      - name: Create Markdown Report File
+        if: steps.analysis.outputs.results_json
+        id: create_report
         uses: actions/github-script@v7
         with:
           script: |
-            // ステップ1: 前のステップからJSON形式の結果を受け取り、パースする
+            const fs = require('fs');
+            const path = require('path');
             const results = JSON.parse('${{ steps.analysis.outputs.results_json }}');
-            const { owner, repo, number } = context.issue;
+            
+            // ファイル名をプルリクエスト番号に基づいて動的に生成
+            const pr_number = context.issue.number;
+            const outputDir = 'docs/debug';
+            const outputFile = `pr-${pr_number}-report.md`;
+            const outputPath = path.join(outputDir, outputFile);
 
-            // ステップ2: JavaScript内で安全にレポートのMarkdownを組み立てる
-            let report = "## :robot: Dify AI Code Analysis Report (C#)\n\n";
+            let report = `# :robot: Dify AI Code Analysis Report for PR #${pr_number}\n\n`;
 
             for (const result of results) {
-              // ここでバッククォートを使っても、JavaScriptのテンプレートリテラル内なので安全
-              report += `### Analysis for \`${result.file}\`\n\n`;
-              report += `**Mermaid Class Diagram:**\n`;
+              report += `## Analysis for \`${result.file}\`\n\n`;
+              report += `### Mermaid Class Diagram\n`;
               report += `\`\`\`mermaid\n`;
-              report += `${result.mermaid}\n`; // Difyからの結果を挿入
+              report += `${result.mermaid || 'No diagram generated.'}\n`;
               report += `\`\`\`\n\n---\n`;
             }
 
-            // ステップ3: コメントを投稿または更新する（このロジックは変更なし）
-            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: number });
-            const botComment = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes('Dify AI Code Analysis Report'));
-
-            if (botComment) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body: report });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number: number, body: report });
-            }
+            // ディレクトリを作成し、ファイルを書き込む
+            fs.mkdirSync(outputDir, { recursive: true });
+            fs.writeFileSync(outputPath, report);
+            
+            console.log(`Report generated at: ${outputPath}`);
+            // 後続のステップで使えるようにファイルパスを出力
+            core.setOutput('report_path', outputPath);
+      
+      # ★★★ 変更点3: 新しいステップ「レポートファイルをコミット＆プッシュ」 ★★★
+      # 生成されたMarkdownファイルをリポジトリにコミットしてプッシュする
+      - name: Commit and Push Report File
+        if: steps.create_report.outputs.report_path
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs(ai): Generate AI analysis report for PR #${{ github.event.pull_request.number }}"
+          file_pattern: "docs/debug/*.md"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_author: "${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>"
