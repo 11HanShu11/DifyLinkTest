@@ -45,7 +45,7 @@ jobs:
             BASENAME=$(basename "$file")
             # UTF-8テキストとしてbase64エンコード
             BASE64_CONTENT=$(base64 -w 0 "$file")
-            FILE_JSON="{\"type\": \"txt\", \"name\": \"$BASENAME\", \"content\": \"$BASE64_CONTENT\"}"
+            FILE_JSON="{\"type\": \"document\", \"name\": \"$BASENAME\", \"content\": \"$BASE64_CONTENT\"}"
             if [ "$FIRST" = true ]; then
               FILE_ARRAY="$FILE_JSON"
               FIRST=false
