@@ -18,7 +18,6 @@ namespace Sugoroku
         [SerializeField] private Image _diceDisplay;
         [SerializeField] private Button _diceBtn;
         [SerializeField] private Button _testBtn;
-        [SerializeField] private Button _Btn;
 
 
 
