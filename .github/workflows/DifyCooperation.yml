@@ -53,8 +53,21 @@ jobs:
 
           for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
             encoded_content=$(base64 -w 0 "$file")
-            json_payload=$(jq -n --arg ec "$encoded_content" --arg user "github-actions-${{ github.actor }}" --arg workflow_id "$DIFY_WORKFLOW_ID" '{"inputs": {"encoded_script": $ec},"response_mode": "blocking","user": $user,"workflow_id": $workflow_id}')
-            
+
+            # Difyの開始ノードで定義されている変数名 'csharp_txt_files' に合わせてキーを変更します。
+            json_payload=$(jq -n \
+              --arg ec "$encoded_content" \
+              --arg user "github-actions-${{ github.actor }}" \
+              --arg workflow_id "$DIFY_WORKFLOW_ID" \
+              '{
+                "inputs": {
+                  "csharp_txt_files": $ec
+                },
+                "response_mode": "blocking",
+                "user": $user,
+                "workflow_id": $workflow_id
+              }')
+              
             # DifyのワークフローAPIを呼び出す
             api_response=$(curl -s -L -X POST "$API_ENDPOINT" -H "Authorization: Bearer $DIFY_API_KEY" -H 'Content-Type: application/json' -d "$json_payload")
             
