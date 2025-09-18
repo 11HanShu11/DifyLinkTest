@@ -21,6 +21,9 @@ namespace Sugoroku
 
 
 
+
+        
+
         private readonly Subject<int> _diceResult = new Subject<int>();
         public IObservable<int> DiceResult => _diceResult;
 
