@@ -54,7 +54,7 @@ jobs:
             fi
           done
 
-          INPUTS="{\"csharp_files\": [$FILE_ARRAY]}"
+          INPUTS="{\"csharp_txt_files\": [$FILE_ARRAY]}"
 
           JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
           echo "$JSON_PAYLOAD" | jq . # 構文チェック
@@ -71,7 +71,7 @@ jobs:
           echo "$RESPONSE" > docs/debug/dify_response.json
 
           # Mermaid図を取得（outputs.mermaid_diagramやresultなど）
-          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.output // .data.outputs.result' 2>/dev/null || echo "")
+          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.output // .data.outputs.result' 2>/dev/null || echo "")
 
           # 結果をマークダウンに変換
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
