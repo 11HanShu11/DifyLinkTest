@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate class diagrams with Dify (Text Mode)
+      - name: Generate class diagrams with Dify (C# as .txt Mode)
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
@@ -38,14 +38,14 @@ jobs:
             exit 0
           fi
 
-          # テキスト型inputsのJSON組み立て
+          # .csファイルを一時的に.txt名でAPIペイロード化
           FILE_ARRAY=""
           FIRST=true
           for file in $TARGET_FILES; do
-            BASENAME=$(basename "$file")
-            # UTF-8テキストとしてbase64エンコード
+            # 拡張子だけtxtに変換（元のファイル名はそのままでも良い）
+            BASENAME_TXT="$(basename "$file" .cs).txt"
             BASE64_CONTENT=$(base64 -w 0 "$file")
-            FILE_JSON="{\"type\": \"file\", \"name\": \"$BASENAME\", \"content\": \"$BASE64_CONTENT\"}"
+            FILE_JSON="{\"type\": \"file\", \"name\": \"$BASENAME_TXT\", \"content\": \"$BASE64_CONTENT\"}"
             if [ "$FIRST" = true ]; then
               FILE_ARRAY="$FILE_JSON"
               FIRST=false
@@ -70,13 +70,13 @@ jobs:
 
           echo "$RESPONSE" > docs/debug/dify_response.json
 
-          # Mermaid図を取得（outputs.mermaid_diagramやresultなど）
+          # Mermaid図を取得
           MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.output // .data.outputs.result' 2>/dev/null || echo "")
 
           # 結果をマークダウンに変換
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          echo "*Generated from uploaded C# files (as text)*" >> docs/ClassDiagrams.md
+          echo "*Generated from uploaded C# files (as .txt)*" >> docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
 
           if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
@@ -100,12 +100,11 @@ jobs:
 
           # 処理したファイル一覧を追加
           echo "" >> docs/ClassDiagrams.md
-          echo "### 📁 Processed Files" >> docs/ClassDiagrams.md
+          echo "### 📁 Processed Files (sent as .txt)" >> docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
           for file in $TARGET_FILES; do
-            if [ -f "$file" ]; then
-              echo "- \`$file\`" >> docs/ClassDiagrams.md
-            fi
+            BASENAME_TXT="$(basename "$file" .cs).txt"
+            echo "- \`$BASENAME_TXT (from $file)\`" >> docs/ClassDiagrams.md
           done
 
       - name: Commit & push updated class diagram
