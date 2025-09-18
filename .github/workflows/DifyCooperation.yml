@@ -1,154 +1,104 @@
-name: Generate C# Class Diagrams
+# ワークフローの名前
+name: Dify AI Code Analysis for C# (Base64 Method)
 
+# ワークフローが実行されるトリガー
 on:
-  push:
-    paths:
-      - "**.cs"
+  # プルリクエストが作成された、または新しいコミットがプッシュされた時
   pull_request:
+    types: [opened, synchronize]
     paths:
-      - "**.cs"
+      - '**.cs' # C#ファイルが変更された場合のみ実行
+
+# ジョブの実行に必要な権限
+permissions:
+  pull-requests: write # プルリクエストへのコメント投稿に必要
 
 jobs:
-  generate-diagram:
+  # コード解析を実行するジョブ
+  analyze_cs_code_with_dify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-
     steps:
+      # ステップ1: リポジトリのコードをチェックアウト
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # 変更差分を取得するために全履歴をフェッチ
 
-      - name: Generate class diagrams with Dify (C# as .txt Mode)
-        id: generate_diagram
+      # ステップ2: 変更されたC#ファイルの一覧を取得
+      - name: Get changed C# files
+        id: changed-files
+        run: |
+          # ベースブランチとの差分から変更された.csファイルの一覧を取得
+          files=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '\.cs$' || true)
+          if [ -z "$files" ]; then
+            echo "No C# files changed. Skipping."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "C# files to analyze: $files"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            # ファイルリストを単一行のJSON配列に変換
+            echo "files_json=$(echo "$files" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
+          fi
+
+      # ステップ3: 変更された各ファイルをDify APIで解析
+      - name: Analyze each file with Dify API
+        if: steps.changed-files.outputs.has_changes == 'true'
+        id: analysis
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
-          DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
+          DIFY_WORKFLOW_URL: ${{ secrets.DIFY_WORKFLOW_ID }}
         run: |
-          mkdir -p docs/debug
-
-          # C#ファイル収集
-          TARGET_FILES=$(find . -name "*.cs" -type f | head -n 10) # Dify側で最大10ファイルまで
-
-          if [ -z "$TARGET_FILES" ]; then
-            echo "No files to process"
-            exit 0
-          fi
-
-          # テキスト型inputsのJSON組み立て
-          FILE_ARRAY=""
-          FIRST=true
-          for file in $TARGET_FILES; do
-            BASENAME_TXT="$(basename "$file" .cs).txt"
-            # UTF-8テキストとしてbase64エンコード
-            BASE64_CONTENT=$(base64 -w 0 "$file")
-            FILE_JSON="{\"type\": \"document\", \"name\": \"$BASENAME_TXT\", \"content\": \"$BASE64_CONTENT\"}"
-            if [ "$FIRST" = true ]; then
-              FILE_ARRAY="$FILE_JSON"
-              FIRST=false
-            else
-              FILE_ARRAY="$FILE_ARRAY, $FILE_JSON"
-            fi
+          final_report="## :robot: Dify AI Code Analysis Report (C#)\n\n"
+          
+          for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
+            echo "--- Analyzing $file ---"
+            
+            # ファイルの内容を読み込み、Base64でエンコード
+            encoded_content=$(base64 -w 0 "$file")
+            
+            # Dify APIに送信するJSONペイロードを構築
+            read -r -d '' json_payload <<EOF
+            {
+              "inputs": {
+                "encoded_script": "$encoded_content"
+              },
+              "response_mode": "blocking",
+              "user": "github-actions-${{ github.actor }}"
+            }
+           EOF
+            
+            # DifyのワークフローAPIを呼び出す
+            api_response=$(curl --location --request POST "$DIFY_WORKFLOW_URL" \
+              --header "Authorization: Bearer $DIFY_API_KEY" \
+              --header 'Content-Type: application/json' \
+              --data "$json_payload" \
+              --silent)
+              
+            # レスポンスをパース
+            mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
+            
+            # レポート本文を組み立て
+            final_report+="### Analysis for \`$file\`\n\n"
+            final_report+="**Mermaid Class Diagram:**\n\`\`\`mermaid\n${mermaid_diagram}\n\`\`\`\n\n---\n"
           done
+          
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$final_report" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-          INPUTS="{\"csharp_txt_files\": [$FILE_ARRAY]}"
-
-          JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
-          echo "$JSON_PAYLOAD" | jq . # 構文チェック
-
-          RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
-            --header "Authorization: Bearer ${DIFY_API_KEY}" \
-            --header "Content-Type: application/json" \
-            --data-raw "$JSON_PAYLOAD")
-
-          # レスポンスをログ出力
-          echo "API Response:"
-          echo "$RESPONSE" | jq . || echo "$RESPONSE"
-
-          echo "$RESPONSE" > docs/debug/dify_response.json
-
-          # Mermaid図を取得
-          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.output // .data.outputs.result' 2>/dev/null || echo "")
-
-          # 結果をマークダウンに変換
-          echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
-          echo "" >> docs/ClassDiagrams.md
-          echo "*Generated from uploaded C# files (as .txt)*" >> docs/ClassDiagrams.md
-          echo "" >> docs/ClassDiagrams.md
-
-          if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
-            echo "<details><summary>📊 Complete Class Diagram</summary>" >> docs/ClassDiagrams.md
-            echo "" >> docs/ClassDiagrams.md
-            if echo "$MERMAID_RESULT" | grep -q '```mermaid'; then
-              echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
-            else
-              echo '```mermaid' >> docs/ClassDiagrams.md
-              echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
-              echo '```' >> docs/ClassDiagrams.md
-            fi
-            echo "" >> docs/ClassDiagrams.md
-            echo "</details>" >> docs/ClassDiagrams.md
-          else
-            ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Failed to parse response")
-            echo "❌ **Failed to generate class diagram**" >> docs/ClassDiagrams.md
-            echo "" >> docs/ClassDiagrams.md
-            echo "Error: $ERROR_MSG" >> docs/ClassDiagrams.md
-          fi
-
-          # 処理したファイル一覧を追加
-          echo "" >> docs/ClassDiagrams.md
-          echo "### 📁 Processed Files (sent as .txt)" >> docs/ClassDiagrams.md
-          echo "" >> docs/ClassDiagrams.md
-          for file in $TARGET_FILES; do
-            BASENAME_TXT="$(basename "$file" .cs).txt"
-            echo "- \`$BASENAME_TXT (from $file)\`" >> docs/ClassDiagrams.md
-          done
-
-      - name: Commit & push updated class diagram
-        run: |
-          git config user.name "github-actions-bot"
-          git config user.email "github-actions-bot@users.noreply.github.com"
-          git config pull.rebase false
-
-          if git diff --quiet docs/ClassDiagrams.md; then
-            echo "No changes to commit"
-            exit 0
-          fi
-
-          git add docs/ClassDiagrams.md
-          if [ -d docs/debug ]; then
-            git add docs/debug/
-          fi
-
-          git commit -m "Update C# class diagrams [skip ci]" || {
-            echo "No changes to commit"
-            exit 0
-          }
-
-          for i in {1..3}; do
-            if git push origin HEAD:main; then
-              echo "✅ Push successful"
-              break
-            else
-              echo "❌ Push failed, attempt $i of 3"
-              if [ $i -lt 3 ]; then
-                echo "Fetching latest changes..."
-                git fetch origin
-                git pull origin main --no-rebase || {
-                  echo "Resolving conflicts (ours for all unmerged files)..."
-                  for f in $(git diff --name-only --diff-filter=U); do
-                    git checkout --ours -- "$f"
-                    git add "$f"
-                  done
-                  git commit -m "Resolve conflicts - keep generated diagrams [skip ci]" || true
-                }
-                sleep 2
-              else
-                echo "❌ Push failed after 3 attempts"
-                exit 1
-              fi
-            fi
-          done
+      # ステップ4: 解析結果をプルリクエストにコメントとして投稿
+      - name: Post analysis result to Pull Request
+        if: steps.changed-files.outputs.has_changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = `${{ steps.analysis.outputs.report }}`;
+            // ... (コメント投稿のロジックは変更なし) ...
+            const { owner, repo, number } = context.issue;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: number });
+            const botComment = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes('Dify AI Code Analysis Report'));
+            if (botComment) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: botComment.id, body: report });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: number, body: report });
+            }
