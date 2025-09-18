@@ -49,52 +49,54 @@ jobs:
           DIFY_WORKFLOW_URL: ${{ secrets.DIFY_WORKFLOW_ID }}
         run: |
           # final_report変数を初期化
-             final_report="## :robot: Dify AI Code Analysis Report (C#)\n\n"
+           final_report="## :robot: Dify AI Code Analysis Report (C#)\n\n"
+
+           # 変更されたファイルごとにループ処理
+           for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
+             echo "--- Analyzing $file ---"
              
-             # 変更されたファイルごとにループ処理
-             for file in $(echo '${{ steps.changed-files.outputs.files_json }}' | jq -r '.[]'); do
-               echo "--- Analyzing $file ---"
-               
-               # ファイルの内容を読み込み、Base64でエンコード
-               encoded_content=$(base64 -w 0 "$file")
-               
-               # Dify APIに送信するJSONペイロードを構築
-               # ★★★ 修正点1: 終了区切り文字 'EOF' を行頭に配置 ★★★
-               read -r -d '' json_payload <<EOF
-           {
-             "inputs": {
-               "encoded_script": "$encoded_content"
-             },
-             "response_mode": "blocking",
-             "user": "github-actions-${{ github.actor }}"
-           }
-           EOF
-               
-               # DifyのワークフローAPIを呼び出す
-               api_response=$(curl --location --request POST "$DIFY_WORKFLOW_URL" \
-                 --header "Authorization: Bearer $DIFY_API_KEY" \
-                 --header 'Content-Type: application/json' \
-                 --data "$json_payload" \
-                 --silent)
-                 
-               # ★★★ 修正点2: Difyからの生レスポンスをデバッグ表示 ★★★
-               echo "--- Raw Dify API Response for $file ---"
-               echo "$api_response"
-               echo "----------------------------------------"
-               
-               # レスポンスをパースしてMermaidダイアグラムを抽出
-               # Difyの出力が 'answer' キーに含まれると仮定
-               mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
-               
-               # レポート本文を組み立て
-               final_report+="### Analysis for \`$file\`\n\n"
-               final_report+="**Mermaid Class Diagram:**\n\`\`\`mermaid\n${mermaid_diagram}\n\`\`\`\n\n---\n"
-             done
+             # ファイルの内容を読み込み、Base64でエンコード
+             encoded_content=$(base64 -w 0 "$file")
              
-             # 複数行のレポートを後続のステップに渡す
-             echo "report<<EOF" >> $GITHUB_OUTPUT
-             echo -e "$final_report" >> $GITHUB_OUTPUT
-             echo "EOF" >> $GITHUB_OUTPUT
+             # ★★★ 修正箇所 ★★★
+             # ヒアドキュメント(EOF)の代わりにjqを使って、安全にJSONペイロードを構築します。
+             # これにより、インデントや空白文字によるエラーを完全に防ぎます。
+             json_payload=$(jq -n \
+               --arg ec "$encoded_content" \
+               --arg user "github-actions-${{ github.actor }}" \
+               '{
+                 "inputs": {
+                   "encoded_script": $ec
+                 },
+                 "response_mode": "blocking",
+                 "user": $user
+               }')
+             
+             # DifyのワークフローAPIを呼び出す
+             api_response=$(curl --location --request POST "$DIFY_WORKFLOW_URL" \
+               --header "Authorization: Bearer $DIFY_API_KEY" \
+               --header 'Content-Type: application/json' \
+               --data "$json_payload" \
+               --silent)
+               
+             # Difyからの生レスポンスをデバッグ表示
+             echo "--- Raw Dify API Response for $file ---"
+             echo "$api_response"
+             echo "----------------------------------------"
+             
+             # レスポンスをパースしてMermaidダイアグラムを抽出
+             mermaid_diagram=$(echo "$api_response" | jq -r '.answer')
+             
+             # レポート本文を組み立て
+             final_report+="### Analysis for \`$file\`\n\n"
+             final_report+="**Mermaid Class Diagram:**\n\`\`\`mermaid\n${mermaid_diagram}\n\`\`\`\n\n---\n"
+           done
+
+           # 複数行のレポートを後続のステップに渡す
+           # この部分はGitHub Actionsの仕様に沿った書き方であり、問題ありません。
+           echo "report<<EOF" >> $GITHUB_OUTPUT
+           echo -e "$final_report" >> $GITHUB_OUTPUT
+           echo "EOF" >> $GITHUB_OUTPUT
 
       # ステップ4: 解析結果をプルリクエストにコメントとして投稿
       - name: Post analysis result to Pull Request
