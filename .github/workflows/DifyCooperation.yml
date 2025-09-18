@@ -17,14 +17,12 @@ jobs:
       issues: write
 
     steps:
-      # 1. リポジトリチェックアウト
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. 全C#ファイルを収集してDifyに送信
-      - name: Generate class diagrams with Dify (Smart Mode)
+      - name: Generate class diagrams with Dify (File Mode)
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
@@ -32,110 +30,57 @@ jobs:
         run: |
           mkdir -p docs/debug
 
-          # docs/ClassDiagrams.mdの有無を確認
-          if [ ! -f docs/ClassDiagrams.md ]; then
-            echo "ClassDiagrams.mdが存在しないので全.csファイルを送信します"
-            TARGET_FILES=$(find . -name "*.cs" -type f)
-          else
-            echo "ClassDiagrams.mdが存在するので差分のみ送信します"
-            # 最新コミットとの差分ファイルのみを取得（mainとの比較例）
-            CHANGED_CS=$(git diff --name-only origin/main...HEAD | grep '\.cs$' || true)
-            # docs/ClassDiagrams.mdも必ず渡す
-            if [ -f docs/ClassDiagrams.md ]; then
-              TARGET_FILES="docs/ClassDiagrams.md $CHANGED_CS"
-            else
-              TARGET_FILES="$CHANGED_CS"
-            fi
-          fi
+          # C#ファイル収集
+          TARGET_FILES=$(find . -name "*.cs" -type f | head -n 10) # Dify側で最大10ファイルまで
 
-          # ファイルがなければ終了
           if [ -z "$TARGET_FILES" ]; then
             echo "No files to process"
             exit 0
           fi
 
-          # 全ファイルをJSON化
-          ALL_FILES_JSON="{"
+          # ファイル型inputsのJSON組み立て
+          FILE_ARRAY=""
           FIRST=true
-
           for file in $TARGET_FILES; do
-            if [ ! -f "$file" ]; then continue; fi
-            SAFE_KEY=$(echo "$file" | sed 's/[^a-zA-Z0-9]/_/g')
-            FILE_CONTENT=$(jq -Rs . "$file")
+            BASENAME=$(basename "$file")
+            BASE64_CONTENT=$(base64 -w 0 "$file")
+            FILE_JSON="{\"type\": \"file\", \"name\": \"$BASENAME\", \"content\": \"$BASE64_CONTENT\"}"
             if [ "$FIRST" = true ]; then
-              ALL_FILES_JSON="${ALL_FILES_JSON}\"${SAFE_KEY}\": $FILE_CONTENT"
+              FILE_ARRAY="$FILE_JSON"
               FIRST=false
             else
-              ALL_FILES_JSON="${ALL_FILES_JSON}, \"${SAFE_KEY}\": $FILE_CONTENT"
+              FILE_ARRAY="$FILE_ARRAY, $FILE_JSON"
             fi
           done
-          ALL_FILES_JSON="${ALL_FILES_JSON}}"
 
-          echo "$ALL_FILES_JSON" > docs/debug/all_files.json
-
-          # C#ファイルをJSON化してALL_FILES_JSONに
-          CS_CODE=""
-          for file in $TARGET_FILES; do
-            if [ ! -f "$file" ]; then continue; fi
-            if [[ "$file" == *.cs ]]; then
-              CONTENT=$(cat "$file")
-              CS_CODE="${CS_CODE}\n${CONTENT}\n"
-            fi
-          done
-          CS_CODE_JSON=$(printf "%s" "$CS_CODE" | jq -Rs .)
-
-          EXISTING_MD=""
-          if [ -f docs/ClassDiagrams.md ]; then
-            EXISTING_MD=$(jq -Rs . docs/ClassDiagrams.md)
-          fi
-          # inputs組み立て部分
-          if [ -n "$EXISTING_MD" ]; then
-            INPUTS="{\"csharp_code\": $CS_CODE_JSON, \"ClassDiagramsMd\": $EXISTING_MD}"
-          else
-            INPUTS="{\"csharp_code\": $CS_CODE_JSON}"
-          fi
+          INPUTS="{\"csharp_files\": [$FILE_ARRAY]}"
 
           JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
           echo "$JSON_PAYLOAD" | jq . # 構文チェック
-          
-
-          # ============修正============
-          # テスト用に短いコードだけ送信
-          CS_CODE_JSON=$(jq -Rs . <<<"public class Test {}")
-          INPUTS="{\"csharp_code\": $CS_CODE_JSON}"
 
           RESPONSE=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
             --header "Authorization: Bearer ${DIFY_API_KEY}" \
             --header "Content-Type: application/json" \
-            --data-raw "{
-              \"workflow_id\": \"${DIFY_WORKFLOW_ID}\",
-              \"inputs\": $INPUTS,
-              \"response_mode\": \"blocking\",
-              \"user\": \"github-actions-bot\"
-            }")
-          # ============修正============
+            --data-raw "$JSON_PAYLOAD")
 
           # レスポンスをログ出力
           echo "API Response:"
           echo "$RESPONSE" | jq . || echo "$RESPONSE"
 
-          # デバッグ用にレスポンス保存
           echo "$RESPONSE" > docs/debug/dify_response.json
+
+          # Mermaid図を取得（file型でもフィールド名は同じはず、outputs.mermaid_diagramやresultなど）
+          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.output // .data.outputs.result' 2>/dev/null || echo "")
 
           # 結果をマークダウンに変換
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          echo "*Generated from all C# files in the repository*" >> docs/ClassDiagrams.md
+          echo "*Generated from uploaded C# files*" >> docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-
-          # Mermaid図を取得
-          MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.result' 2>/dev/null || echo "")
 
           if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
             echo "<details><summary>📊 Complete Class Diagram</summary>" >> docs/ClassDiagrams.md
             echo "" >> docs/ClassDiagrams.md
-            
-            # Mermaidブロックが含まれているかチェック
             if echo "$MERMAID_RESULT" | grep -q '```mermaid'; then
               echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
             else
@@ -143,7 +88,6 @@ jobs:
               echo "$MERMAID_RESULT" >> docs/ClassDiagrams.md
               echo '```' >> docs/ClassDiagrams.md
             fi
-            
             echo "" >> docs/ClassDiagrams.md
             echo "</details>" >> docs/ClassDiagrams.md
           else
@@ -157,20 +101,18 @@ jobs:
           echo "" >> docs/ClassDiagrams.md
           echo "### 📁 Processed Files" >> docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          for file in $CS_FILES; do
+          for file in $TARGET_FILES; do
             if [ -f "$file" ]; then
               echo "- \`$file\`" >> docs/ClassDiagrams.md
             fi
           done
 
-      # 3. 変更をコミット・プッシュ
       - name: Commit & push updated class diagram
         run: |
           git config user.name "github-actions-bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
           git config pull.rebase false
 
-          # 変更があるかチェック
           if git diff --quiet docs/ClassDiagrams.md; then
             echo "No changes to commit"
             exit 0
@@ -186,7 +128,6 @@ jobs:
             exit 0
           }
 
-          # プッシュを最大3回試行
           for i in {1..3}; do
             if git push origin HEAD:main; then
               echo "✅ Push successful"
@@ -198,7 +139,6 @@ jobs:
                 git fetch origin
                 git pull origin main --no-rebase || {
                   echo "Resolving conflicts (ours for all unmerged files)..."
-                  # 競合ファイルを全てours優先で自動解決
                   for f in $(git diff --name-only --diff-filter=U); do
                     git checkout --ours -- "$f"
                     git add "$f"
