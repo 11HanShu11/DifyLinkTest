@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate class diagrams with Dify (File Mode)
+      - name: Generate class diagrams with Dify (Text Mode)
         id: generate_diagram
         env:
           DIFY_API_KEY: ${{ secrets.DIFY_API_KEY }}
@@ -38,13 +38,14 @@ jobs:
             exit 0
           fi
 
-          # ファイル型inputsのJSON組み立て
+          # テキスト型inputsのJSON組み立て
           FILE_ARRAY=""
           FIRST=true
           for file in $TARGET_FILES; do
             BASENAME=$(basename "$file")
+            # UTF-8テキストとしてbase64エンコード
             BASE64_CONTENT=$(base64 -w 0 "$file")
-            FILE_JSON="{\"type\": \"file\", \"name\": \"$BASENAME\", \"content\": \"$BASE64_CONTENT\"}"
+            FILE_JSON="{\"type\": \"txt\", \"name\": \"$BASENAME\", \"content\": \"$BASE64_CONTENT\"}"
             if [ "$FIRST" = true ]; then
               FILE_ARRAY="$FILE_JSON"
               FIRST=false
@@ -53,7 +54,7 @@ jobs:
             fi
           done
 
-          INPUTS="{\"csharp_files\": [$FILE_ARRAY]}"
+          INPUTS="{\"csharp_code\": [$FILE_ARRAY]}"
 
           JSON_PAYLOAD="{\"workflow_id\": \"${DIFY_WORKFLOW_ID}\", \"inputs\": $INPUTS, \"response_mode\": \"blocking\", \"user\": \"github-actions-bot\"}"
           echo "$JSON_PAYLOAD" | jq . # 構文チェック
@@ -69,13 +70,13 @@ jobs:
 
           echo "$RESPONSE" > docs/debug/dify_response.json
 
-          # Mermaid図を取得（file型でもフィールド名は同じはず、outputs.mermaid_diagramやresultなど）
+          # Mermaid図を取得（outputs.mermaid_diagramやresultなど）
           MERMAID_RESULT=$(echo "$RESPONSE" | jq -r '.data.outputs.mermaid_diagram // .data.outputs.class_diagram // .data.outputs.output // .data.outputs.result' 2>/dev/null || echo "")
 
           # 結果をマークダウンに変換
           echo "## 🤖 AI Generated C# Class Diagrams" > docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
-          echo "*Generated from uploaded C# files*" >> docs/ClassDiagrams.md
+          echo "*Generated from uploaded C# files (as text)*" >> docs/ClassDiagrams.md
           echo "" >> docs/ClassDiagrams.md
 
           if [ -n "$MERMAID_RESULT" ] && [ "$MERMAID_RESULT" != "null" ] && [ "$MERMAID_RESULT" != "" ]; then
