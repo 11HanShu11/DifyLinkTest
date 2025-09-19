@@ -19,6 +19,13 @@ jobs:
       DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
     steps:
+      # ステップ1: リポジトリのコードをチェックアウト
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref }} # プルリクエストのブランチを明示的にチェックアウト
+          fetch-depth: 0
 
       # デバッグ用：現在実行されているワークフローファイルの内容を出力する
       - name: Display Workflow File for Debugging
@@ -26,14 +33,6 @@ jobs:
           echo "--- Currently executing workflow file content ---"
           cat .github/workflows/dify_code_analysis.yml # 自身のファイル名に合わせる
           echo "---------------------------------------------"
-          
-      # ステップ1: リポジトリのコードをチェックアウト
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-          ref: ${{ github.head_ref }} # プルリクエストのブランチを明示的にチェックアウト
 
       # ステップ2: 変更されたC#ファイルの一覧を取得
       - name: Get changed C# files
