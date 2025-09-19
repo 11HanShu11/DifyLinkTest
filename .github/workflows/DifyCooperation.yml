@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize]
     paths:
-      - '**.cs'
+      - "**.cs"
 
 permissions:
   contents: write
@@ -25,6 +25,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          ref: ${{ github.head_ref }} # プルリクエストのブランチを明示的にチェックアウト
 
       # ステップ2: 変更されたC#ファイルの一覧を取得
       - name: Get changed C# files
@@ -105,7 +106,7 @@ jobs:
               fs.writeFileSync(outputPath, report);
               console.log(`Report generated at: ${outputPath}`);
             }
-      
+
       # ステップ5: レポートファイルをコミット＆プッシュ
       - name: Commit and Push Report Files
         if: steps.analysis.outputs.results_json
