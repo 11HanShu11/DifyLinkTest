@@ -19,6 +19,14 @@ jobs:
       DIFY_WORKFLOW_ID: ${{ secrets.DIFY_WORKFLOW_ID }}
 
     steps:
+
+      # デバッグ用：現在実行されているワークフローファイルの内容を出力する
+      - name: Display Workflow File for Debugging
+        run: |
+          echo "--- Currently executing workflow file content ---"
+          cat .github/workflows/dify_code_analysis.yml # 自身のファイル名に合わせる
+          echo "---------------------------------------------"
+          
       # ステップ1: リポジトリのコードをチェックアウト
       - name: Checkout code
         uses: actions/checkout@v4
